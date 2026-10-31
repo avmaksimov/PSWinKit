@@ -102,6 +102,8 @@ function Get-ValidatedPath {
 $script:ACLRepaired = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
 $script:RepairedCount = 0
 $script:DeletedCount = 0
+$script:DeletedFileCount = 0
+$script:FilesInRemovedTargets = 0
 $script:LinkCount = 0
 $script:FailureCount = 0
 $script:FailureSamples = New-Object 'System.Collections.Generic.List[string]'
@@ -115,31 +117,48 @@ $script:TargetsRemoved = 0
 $script:TargetsFailed = 0
 $script:CurrentTarget = $null
 $script:MainError = $null
+$script:Confirmed = $false
+$script:SelectedTargets = @()
+$script:CurrentNumber = $null
 
 function Show-Summary {
     Write-Host "`n$(Get-UtilityMessage -Key 'Common.SummaryTitle' -Messages $UtilityMessages)" -ForegroundColor Cyan
     Write-Host (T 'SummaryResult' -Values @($script:Result))
-    Write-Host (T 'SummaryPhase' -Values @($script:Phase))
-    Write-Host (T 'SummaryInput' -Values @($script:InputCount))
-    Write-Host (T 'SummaryTargets' -Values @($script:TargetCount, $script:SkippedCount))
-    Write-Host (T 'SummaryStarted' -Values @($script:StartedCount, $script:TargetsRemoved, $script:TargetsFailed))
-    $remaining = [Math]::Max(0, $script:TargetCount - $script:StartedCount)
-    if ($remaining -gt 0) {
-        Write-Host (T 'SummaryUnstarted' -Values @($remaining)) -ForegroundColor Yellow
+
+    # Do not repeat successfully deleted paths. Show only those still remaining,
+    # interrupted or not started, keeping the original input numbering.
+    if ($script:Confirmed) {
+        $incomplete = @($script:SelectedTargets | Where-Object { $_.State -ne 'Removed' })
+        if ($incomplete.Count -gt 0) {
+            Write-Host (T 'SummaryIncomplete') -ForegroundColor Yellow
+            foreach ($item in $incomplete) {
+                $statusKey = switch ($item.State) {
+                    'Failed'  { 'ItemFailed' }
+                    'Started' { 'ItemInterrupted' }
+                    default   { 'ItemNotStarted' }
+                }
+                Write-Host ('{0}. {1} ({2})' -f $item.Number, $item.Path, (T $statusKey)) -ForegroundColor Yellow
+            }
+        }
+        else {
+            Write-Host (T 'SummaryNoneIncomplete') -ForegroundColor Green
+        }
     }
-    if ($script:CurrentTarget) {
-        Write-Host (T 'SummaryCurrent' -Values @($script:CurrentTarget)) -ForegroundColor Yellow
-    }
-    Write-Host (T 'SummaryObjects' -Values @($script:DeletedCount, $script:LinkCount))
-    Write-Host (T 'SummaryPermissions' -Values @($script:RepairedCount))
-    Write-Host (T 'SummaryErrors' -Values @($script:FailureCount))
+
     if ($script:MainError) { Write-Warning $script:MainError }
     foreach ($failure in $script:FailureSamples) { Write-Warning $failure }
     if ($script:FailureCount -gt $script:FailureSamples.Count) {
         Write-Warning (T 'SummaryTruncated')
     }
-}
 
+    Write-Host (T 'SummaryRemovedTargets' -Values @($script:TargetsRemoved))
+    Write-Host (T 'SummaryRemovedFiles' -Values @($script:FilesInRemovedTargets))
+    Write-Host (T 'SummarySkipped' -Values @($script:SkippedCount))
+    $remaining = [Math]::Max(0, $script:TargetCount - $script:StartedCount)
+    if ($remaining -gt 0 -and $script:Confirmed) {
+        Write-Host (T 'SummaryUnstarted' -Values @($remaining)) -ForegroundColor Yellow
+    }
+}
 function Repair-Access {
     param([string]$Path, [bool]$Directory)
 
@@ -266,20 +285,31 @@ function Remove-SafeEntry {
 
     $script:DeletedCount++
     if ($link) { $script:LinkCount++ }
+    # Only regular files count as files; links are distinct objects.
+    if (-not $directory -and -not $link) { $script:DeletedFileCount++ }
     return $true
 }
 
 function Invoke-Main {
     $script:Phase = T 'PhaseEntry'
+    # Warn before reading even the first path.
+    Write-Host ''
+    Write-Host ('!' * 68) -ForegroundColor Red
+    Write-Host (T 'WarningTitle') -ForegroundColor Red
+    Write-Host (T 'WarningPermanence') -ForegroundColor Yellow
+    Write-Host (T 'WarningConsequences') -ForegroundColor Yellow
+    Write-Host ('!' * 68) -ForegroundColor Red
+    Write-Host ''
     Write-Host (T 'Intro') -ForegroundColor Cyan
     Write-Host (T 'Instructions')
     Write-Host (T 'Protection') -ForegroundColor DarkGray
 
-    $inputs = New-Object 'System.Collections.Generic.List[string]'
+    $inputs = New-Object 'System.Collections.Generic.List[object]'
     while ($true) {
-        $line = Read-Host (T 'PathPrompt')
+        $number = $inputs.Count + 1
+        $line = (Read-Host ('{0}. {1}' -f $number, (T 'PathPrompt'))).Trim()
         if ([string]::IsNullOrWhiteSpace($line)) { break }
-        $inputs.Add($line)
+        $inputs.Add([pscustomobject]@{ Number = $number; Raw = $line })
         $script:InputCount++
     }
     if ($inputs.Count -eq 0) {
@@ -289,42 +319,68 @@ function Invoke-Main {
     }
 
     $script:Phase = T 'PhaseValidation'
-    $queue = New-Object 'System.Collections.Generic.List[string]'
+    # Keep original numbers, even for duplicates or rejected input.
+    $queue = New-Object 'System.Collections.Generic.List[object]'
+    $entries = New-Object 'System.Collections.Generic.List[object]'
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
-    $rejected = New-Object 'System.Collections.Generic.List[string]'
+
     foreach ($candidate in $inputs) {
+        $entry = [pscustomobject]@{
+            Number = $candidate.Number
+            Path   = $candidate.Raw
+            State  = 'Skipped'
+            Reason = ''
+        }
+        $entries.Add($entry)
         try {
-            $path = Get-ValidatedPath -InputPath $candidate
-            [void](Get-Attributes -Path $path)
-            if ($seen.Add($path)) { $queue.Add($path) }
+            $path = Get-ValidatedPath -InputPath $candidate.Raw
+            $attr = Get-Attributes -Path $path
+            $entry.Path = $path
+            if ($seen.Add($path)) {
+                $entry.State = 'Queued'
+                $queue.Add($entry)
+            }
+            else {
+                $entry.Reason = T 'DuplicatePath'
+            }
         }
         catch {
-            $rejected.Add("$(T 'PreviewSkip'): $candidate — $($_.Exception.Message)")
+            $entry.Reason = $_.Exception.Message
         }
     }
 
-    $selected = New-Object 'System.Collections.Generic.List[string]'
+    # If both a directory and one of its descendants are listed, delete only
+    # the outer directory. The descendant keeps its original number as skipped.
+    $selected = New-Object 'System.Collections.Generic.List[object]'
     foreach ($candidate in $queue) {
-        $nested = $false
+        $parent = $null
         foreach ($other in $queue) {
-            if ($candidate -ine $other -and (Test-IsWithin -Path $candidate -Base $other)) {
-                $nested = $true
+            if ($candidate.Path -ine $other.Path -and
+                (Test-IsWithin -Path $candidate.Path -Base $other.Path)) {
+                $parent = $other
                 break
             }
         }
-        if (-not $nested) { $selected.Add($candidate) }
+        if ($null -eq $parent) {
+            $selected.Add($candidate)
+        }
+        else {
+            $candidate.State = 'Skipped'
+            $candidate.Reason = T 'CoveredByParent' -Values @($parent.Number)
+        }
     }
 
-    Write-Host "`n$(T 'PreviewTitle')" -ForegroundColor Cyan
-    foreach ($path in $selected) {
-        $attr = Get-Attributes -Path $path
-        $type = if (Test-IsReparsePoint -Attributes $attr) { T 'PreviewLink' } else { T 'PreviewDelete' }
-        Write-Host ("{0,-10} {1}" -f $type, $path) -ForegroundColor Yellow
-    }
-    foreach ($entry in $rejected) { Write-Host $entry -ForegroundColor DarkGray }
+    # Paths are already visible in the numbered input. Do not list them again.
+    $script:SelectedTargets = $selected.ToArray()
     $script:TargetCount = $selected.Count
-    $script:SkippedCount = $rejected.Count
-    Write-Host (T 'PreviewCounts' -Values @($selected.Count, $rejected.Count))
+    $script:SkippedCount = $entries.Count - $selected.Count
+    Write-Host "`n$(T 'PreviewTitle')" -ForegroundColor Cyan
+    Write-Host (T 'PreviewCounts' -Values @($selected.Count, $script:SkippedCount))
+    foreach ($entry in $entries) {
+        if ($entry.State -eq 'Skipped') {
+            Write-Host (T 'PreviewSkippedReason' -Values @($entry.Number, $entry.Reason)) -ForegroundColor DarkGray
+        }
+    }
     if ($selected.Count -eq 0) {
         $script:Result = T 'StatusNoValid'
         $script:Phase = T 'PhaseDone'
@@ -344,27 +400,39 @@ function Invoke-Main {
     }
 
     $script:Phase = T 'PhaseDeletion'
-    foreach ($path in $selected) {
+    $script:Confirmed = $true
+    foreach ($entry in $selected) {
+        $path = $entry.Path
         $script:StartedCount++
+        $filesBefore = $script:DeletedFileCount
+        $script:CurrentNumber = $entry.Number
         $script:CurrentTarget = $path
-        Write-Host "`n$(T 'Removing' -Values @($path))" -ForegroundColor Cyan
+        $entry.State = 'Started'
+        Write-Host ("`n{0}. {1}" -f $entry.Number, (T 'Removing')) -ForegroundColor Cyan
         try {
             [void](Get-ValidatedPath -InputPath $path)
             if (Remove-SafeEntry -Path $path) {
                 Write-Host (T 'Deleted') -ForegroundColor Green
+                $entry.State = 'Removed'
                 $script:TargetsRemoved++
+                # Count regular files only inside targets that were fully removed.
+                # Partial targets never inflate the completed-file total.
+                $script:FilesInRemovedTargets += ($script:DeletedFileCount - $filesBefore)
             }
             else {
+                $entry.State = 'Failed'
                 $script:TargetsFailed++
                 Write-Warning (T 'PartialWarning')
             }
         }
         catch {
+            $entry.State = 'Failed'
             $script:TargetsFailed++
             Add-Failure -Path $path -Message $_.Exception.Message
             Write-Warning (T 'FailedWarning' -Values @($path))
         }
         $script:CurrentTarget = $null
+        $script:CurrentNumber = $null
     }
 
     $script:Result = if ($script:TargetsFailed -eq 0) { Get-UtilityMessage -Key 'Common.Completed' -Messages $UtilityMessages } else { T 'StatusPartial' }

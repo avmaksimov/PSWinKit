@@ -1,4 +1,4 @@
-# Remove-Paths — interactive file and directory removal
+﻿# Remove-Paths — interactive file and directory removal
 
 Windows 10/11, Windows PowerShell 5.1 (x86/x64).
 
@@ -35,9 +35,22 @@ sessions do not. The library checks the parent process when needed and passes
 
 ## Deletion
 
-Enter absolute paths, one per line; an empty Enter finishes the list.
-Review the preview and type `Y` to confirm or `N` to cancel. Neither is the
-default. Files are deleted permanently, without the Recycle Bin.
+A prominent warning about **permanent deletion without the Recycle Bin**
+is displayed before input. Enter absolute paths as `1. Path:`, `2. Path:`, etc.
+**Press Enter on an empty line to finish.** No special `Esc` handling is needed.
+
+After input, the preview shows counts for paths to be deleted and paths
+skipped. **Paths are not repeated**; reasons for skipping are displayed only
+by original input numbers. Confirm with `Y` or cancel with `N`; there is no
+default choice.
+
+During deletion, the original numbers are used. The final summary lists
+**only paths not fully deleted**, including their original numbers and full
+paths, followed by the number of fully deleted paths, regular files removed
+**within fully deleted paths**, and paths skipped during validation. Links and
+directories are not counted as files, and files removed from partially
+deleted paths are not included in the completed-files total. When interrupted,
+not-yet-started targets are counted separately.
 
 If normal deletion fails, the utility may take ownership as Administrators,
 reenable inheritance, and give Everyone full control via SID `S-1-1-0`.

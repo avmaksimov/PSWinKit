@@ -1,4 +1,4 @@
-# Shared PowerShell utility contract
+﻿# Shared PowerShell utility contract
 
 ## Scope
 
@@ -102,7 +102,16 @@ Omit `-RequireAdministrator` if elevation is not required.
 
 ## Errors and safety
 
-- Destructive operations require a preview and explicit Y/N with no default.
+- Dangerous operations require a preview and `Y/N` confirmation with no default.
+- Permanent deletion must show a prominent warning before path input and
+  require explicit confirmation before making changes.
+- Remove-Paths numbers input paths and ends entry on a blank Enter. The
+  pre-deletion preview shows counts and skipped-input reasons by number, without
+  repeating paths. The final summary shows only incomplete paths with original
+  input numbers and names, then counts fully deleted paths, regular files
+  deleted within them, and paths skipped during validation. Directory and
+  reparse-point links are not counted as files; partially deleted targets do
+  not contribute to the completed-file total.
 - Each utility owns its `finally` summary; ordinary Ctrl+C allows best-effort
   stack unwinding and summary, unlike forceful process termination.
 - Never traverse NTFS junctions, symlinks or mount points when deleting or
