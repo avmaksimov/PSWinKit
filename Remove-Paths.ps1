@@ -90,10 +90,38 @@ function Test-IsProtected {
     return $false
 }
 
+# Use the extended-length namespace for long filesystem paths. Keep all
+# security checks, comparisons and user-visible paths in normal D:\... form.
+# This also lets Windows PowerShell 5.1 access Win32 paths >= MAX_PATH.
+function Convert-ToNativePath {
+    param([string]$Path)
+    if ($Path.StartsWith('\\?\', [StringComparison]::Ordinal)) { return $Path }
+    if ($Path.Length -ge 248 -and $Path -match '^[A-Za-z]:\\') {
+        return ('\\?\' + $Path)
+    }
+    return $Path
+}
+
+function Convert-FromNativePath {
+    param([string]$Path)
+    if ($Path.StartsWith('\\?\', [StringComparison]::Ordinal)) {
+        return $Path.Substring(4)
+    }
+    return $Path
+}
+
+function Get-ParentPath {
+    param([string]$Path)
+    $path = (Convert-FromNativePath $Path).TrimEnd('\')
+    $index = $path.LastIndexOf('\')
+    if ($index -le 2) { return $path.Substring(0, 3) }
+    return $path.Substring(0, $index)
+}
+
 function Get-Attributes {
     param([string]$Path)
     # GetFileAttributes reads attributes of the reparse point, not its target.
-    return [IO.File]::GetAttributes($Path)
+    return [IO.File]::GetAttributes((Convert-ToNativePath $Path))
 }
 
 function Test-IsReparsePoint {
@@ -257,7 +285,7 @@ function Test-DirectoryDeleteAccess {
     param([string]$Path)
     if (-not $script:AuthzReady) { return $true }
     # FILE_LIST_DIRECTORY (1) + FILE_DELETE_CHILD (0x40)
-    try { return [RemovePathsAuthz]::HasAccess($Path, [uint32]0x41) }
+    try { return [RemovePathsAuthz]::HasAccess((Convert-ToNativePath $Path), [uint32]0x41) }
     catch {
         # Revert to actual operations; never guess that an ACL change is necessary.
         return $true
@@ -271,7 +299,7 @@ function Grant-ObjectAccess {
     $rights = [Security.AccessControl.FileSystemRights]::FullControl
     $allow = [Security.AccessControl.AccessControlType]::Allow
     if ($Directory) {
-        $item = [IO.DirectoryInfo]::new($Path)
+        $item = [IO.DirectoryInfo]::new((Convert-ToNativePath $Path))
         $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
         $rule = [Security.AccessControl.FileSystemAccessRule]::new(
             $everyone, $rights, [Security.AccessControl.InheritanceFlags]::None,
@@ -280,7 +308,7 @@ function Grant-ObjectAccess {
         $item.SetAccessControl($acl)
     }
     else {
-        $item = [IO.FileInfo]::new($Path)
+        $item = [IO.FileInfo]::new((Convert-ToNativePath $Path))
         $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
         $rule = [Security.AccessControl.FileSystemAccessRule]::new($everyone, $rights, $allow)
         $acl.AddAccessRule($rule)
@@ -427,7 +455,7 @@ function Repair-Access {
         catch { }
         if (-not $granted) {
             Set-DeletionStage -Key 'StageOwnership' -Path $Path
-            try { & takeown.exe /F $Path /A 2>&1 | Out-Null } catch { }
+            try { & takeown.exe /F (Convert-ToNativePath $Path) /A 2>&1 | Out-Null } catch { }
             Set-DeletionStage -Key 'StagePermissions' -Path $Path
             try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
             catch { }
@@ -447,22 +475,22 @@ function Invoke-DeleteLeaf {
     if ($Link) {
         # Directory.Delete(non-recursive) unlinks junctions/symlinks/mount points.
         # File.Delete unlinks file symbolic links. Neither traverses their target.
-        if ($Directory) { [IO.Directory]::Delete($Path) }
-        else { [IO.File]::Delete($Path) }
+        if ($Directory) { [IO.Directory]::Delete((Convert-ToNativePath $Path)) }
+        else { [IO.File]::Delete((Convert-ToNativePath $Path)) }
     }
     elseif ($Directory) {
         # The tree has already been traversed by us. Never use -Recurse here.
-        try { [IO.Directory]::Delete($Path) }
+        try { [IO.Directory]::Delete((Convert-ToNativePath $Path)) }
         catch {
             # Unlike Remove-Item -Force, Directory.Delete may reject ReadOnly directories.
-            $attributes = [IO.File]::GetAttributes($Path)
+            $attributes = Get-Attributes -Path $Path
             if (($attributes -band [IO.FileAttributes]::ReadOnly) -eq 0) { throw }
-            [IO.File]::SetAttributes($Path, ($attributes -band (-bnot [IO.FileAttributes]::ReadOnly)))
-            [IO.Directory]::Delete($Path)
+            [IO.File]::SetAttributes((Convert-ToNativePath $Path), ($attributes -band (-bnot [IO.FileAttributes]::ReadOnly)))
+            [IO.Directory]::Delete((Convert-ToNativePath $Path))
         }
     }
     else {
-        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        Remove-Item -LiteralPath (Convert-ToNativePath $Path) -Force -ErrorAction Stop
     }
 }
 
@@ -507,18 +535,18 @@ function Remove-SafeEntry {
         }
         Set-DeletionStage -Key 'StageEnumerating' -Path $Path
         try {
-            $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
+            $children = @(Get-ChildItem -LiteralPath (Convert-ToNativePath $Path) -Force -ErrorAction Stop)
         }
         catch {
             [void](Repair-Access -Path $Path -Directory $true)
-            try { $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop) }
+            try { $children = @(Get-ChildItem -LiteralPath (Convert-ToNativePath $Path) -Force -ErrorAction Stop) }
             catch {
                 Add-Failure -Path $Path -Message $_.Exception.Message
                 return $false
             }
         }
         foreach ($child in $children) {
-            if (-not (Remove-SafeEntry -Path $child.FullName)) { $childFailures = $true }
+            if (-not (Remove-SafeEntry -Path (Convert-FromNativePath $child.FullName))) { $childFailures = $true }
         }
         if ($childFailures) { return $false }
     }
@@ -527,7 +555,7 @@ function Remove-SafeEntry {
     # Attempt deletion even after unsuccessful access repair.
     try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
     catch {
-        $parent = [IO.Path]::GetDirectoryName($Path)
+        $parent = Get-ParentPath -Path $Path
         if ($link) {
             # Reparse points may be unlinked, but NEVER receive changed ACL/owner.
             if ($parent -and -not (Test-IsProtected -Path $parent)) {
