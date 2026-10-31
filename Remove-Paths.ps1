@@ -18,11 +18,44 @@ if ($null -eq $utility) { return }
 $ErrorActionPreference = 'Stop'
 $UtilityMessages = $utility.Messages
 
+# Format counts consistently with spaces, regardless of the Windows culture.
+function Format-Count {
+    param([long]$Value)
+    return $Value.ToString('N0', [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ')
+}
+
 # Get-UtilityMessage is provided by the dot-sourced common library.
 function T {
     param([string]$Key, [object[]]$Values = @())
-    return (Get-UtilityMessage -Key ("RemovePaths.$Key") -Messages $UtilityMessages -Values $Values)
+    $formatted = @(
+        foreach ($value in $Values) {
+            if ($value -is [int] -or $value -is [long]) { Format-Count $value }
+            else { $value }
+        }
+    )
+    return (Get-UtilityMessage -Key ("RemovePaths.$Key") -Messages $UtilityMessages -Values $formatted)
 }
+
+
+# Regional date/time (including seconds); days in the elapsed time are localized.
+$script:StartedAt = Get-Date
+$script:RunWatch = [Diagnostics.Stopwatch]::StartNew()
+function Format-RegionalDateTime {
+    param([datetime]$Value)
+    $culture = [Globalization.CultureInfo]::CurrentCulture
+    return ($Value.ToString('d', $culture) + ' ' + $Value.ToString('T', $culture))
+}
+function Format-ElapsedTime {
+    param([TimeSpan]$Value)
+    $clock = '{0:00}:{1:00}:{2:00}' -f $Value.Hours, $Value.Minutes, $Value.Seconds
+    $days = [long][Math]::Floor($Value.TotalDays)
+    if ($days -gt 0) {
+        $suffix = if ($utility.LanguageFile -match '(?i)[\/]ru(?:-[^\/]+)?\.psd1$') { 'д' } else { 'd' }
+        return ((Format-Count $days) + $suffix + ' ' + $clock)
+    }
+    return $clock
+}
+Write-Host (T 'StartTime' -Values @((Format-RegionalDateTime $script:StartedAt))) -ForegroundColor DarkGray
 
 function Test-IsWithin {
     param([string]$Path, [string]$Base)
@@ -99,6 +132,162 @@ function Get-ValidatedPath {
     return $path
 }
 
+# Authz is used only for real directories: links are never checked or modified.
+# C# is compiled once per PowerShell process; security descriptors come directly from NTFS.
+$authzSource = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+
+public static class RemovePathsAuthz {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LUID { public uint LowPart; public int HighPart; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AUTHZ_ACCESS_REQUEST {
+        public uint DesiredAccess;
+        public IntPtr PrincipalSelfSid;
+        public IntPtr ObjectTypeList;
+        public uint ObjectTypeListLength;
+        public IntPtr OptionalArguments;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AUTHZ_ACCESS_REPLY {
+        public uint ResultListLength;
+        public IntPtr GrantedAccessMask;
+        public IntPtr SaclEvaluationResults;
+        public IntPtr Error;
+    }
+    [DllImport("authz.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern bool AuthzInitializeResourceManager(uint flags, IntPtr a, IntPtr b,
+        IntPtr c, string name, out IntPtr resourceManager);
+    [DllImport("authz.dll", SetLastError=true)]
+    private static extern bool AuthzInitializeContextFromToken(uint flags, IntPtr token,
+        IntPtr resourceManager, IntPtr expiry, LUID identifier,
+        IntPtr args, out IntPtr clientContext);
+    [DllImport("authz.dll")]
+    private static extern bool AuthzFreeContext(IntPtr context);
+    [DllImport("authz.dll")]
+    private static extern bool AuthzFreeResourceManager(IntPtr manager);
+    [DllImport("authz.dll", SetLastError=true)]
+    private static extern bool AuthzAccessCheck(uint flags, IntPtr context,
+        ref AUTHZ_ACCESS_REQUEST request, IntPtr auditEvent,
+        IntPtr securityDescriptor, IntPtr additionalDescriptors, uint additionalCount,
+        ref AUTHZ_ACCESS_REPLY reply, IntPtr cachedResults);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, EntryPoint="GetNamedSecurityInfoW", ExactSpelling=true)]
+    private static extern uint GetNamedSecurityInfoW(string path, uint objectType, uint info,
+        out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl,
+        out IntPtr descriptor);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr value);
+    private static IntPtr manager = IntPtr.Zero;
+    private static IntPtr context = IntPtr.Zero;
+
+    public static void Initialize() {
+        if (context != IntPtr.Zero) return;
+        if (!AuthzInitializeResourceManager(1, IntPtr.Zero, IntPtr.Zero,
+            IntPtr.Zero, "Remove-Paths", out manager))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+            LUID identifier = new LUID();
+            if (!AuthzInitializeContextFromToken(0, identity.Token, manager,
+                    IntPtr.Zero, identifier, IntPtr.Zero, out context)) {
+                int error = Marshal.GetLastWin32Error();
+                AuthzFreeResourceManager(manager);
+                manager = IntPtr.Zero;
+                throw new Win32Exception(error);
+            }
+        }
+    }
+    public static bool HasAccess(string path, uint rights) {
+        if (context == IntPtr.Zero) throw new InvalidOperationException("Not initialized");
+        IntPtr owner, group, dacl, sacl, descriptor;
+        // OWNER + DACL are mandatory for AuthzAccessCheck.
+        uint status = GetNamedSecurityInfoW(path, 1, 0x00000005,
+            out owner, out group, out dacl, out sacl, out descriptor);
+        if (status != 0) return false; // Check unavailable: try ACL correction.
+        IntPtr granted = IntPtr.Zero, saclResults = IntPtr.Zero, errors = IntPtr.Zero;
+        try {
+            granted = Marshal.AllocHGlobal(4);
+            saclResults = Marshal.AllocHGlobal(4);
+            errors = Marshal.AllocHGlobal(4);
+            Marshal.WriteInt32(granted, 0);
+            Marshal.WriteInt32(saclResults, 0);
+            Marshal.WriteInt32(errors, 0);
+            AUTHZ_ACCESS_REQUEST req = new AUTHZ_ACCESS_REQUEST();
+            req.DesiredAccess = rights;
+            AUTHZ_ACCESS_REPLY reply = new AUTHZ_ACCESS_REPLY();
+            reply.ResultListLength = 1;
+            reply.GrantedAccessMask = granted;
+            reply.SaclEvaluationResults = saclResults;
+            reply.Error = errors;
+            if (!AuthzAccessCheck(0, context, ref req, IntPtr.Zero, descriptor,
+                IntPtr.Zero, 0, ref reply, IntPtr.Zero)) return false;
+            if (Marshal.ReadInt32(errors) != 0) return false;
+            return (((uint)Marshal.ReadInt32(granted) & rights) == rights);
+        }
+        finally {
+            if (granted != IntPtr.Zero) Marshal.FreeHGlobal(granted);
+            if (saclResults != IntPtr.Zero) Marshal.FreeHGlobal(saclResults);
+            if (errors != IntPtr.Zero) Marshal.FreeHGlobal(errors);
+            if (descriptor != IntPtr.Zero) LocalFree(descriptor);
+        }
+    }
+    public static void Dispose() {
+        if (context != IntPtr.Zero) { AuthzFreeContext(context); context = IntPtr.Zero; }
+        if (manager != IntPtr.Zero) { AuthzFreeResourceManager(manager); manager = IntPtr.Zero; }
+    }
+}
+'@
+$script:AuthzReady = $false
+try {
+    if (-not ('RemovePathsAuthz' -as [type])) {
+        Add-Type -TypeDefinition $authzSource -ErrorAction Stop
+    }
+    [RemovePathsAuthz]::Initialize()
+    $script:AuthzReady = $true
+}
+catch {
+    # Keep the deletion path functional if Authz initialization is unavailable.
+    $script:AuthzReady = $false
+    Write-Warning (T 'AuthzUnavailable')
+}
+
+function Test-DirectoryDeleteAccess {
+    param([string]$Path)
+    if (-not $script:AuthzReady) { return $true }
+    # FILE_LIST_DIRECTORY (1) + FILE_DELETE_CHILD (0x40)
+    try { return [RemovePathsAuthz]::HasAccess($Path, [uint32]0x41) }
+    catch {
+        # Revert to actual operations; never guess that an ACL change is necessary.
+        return $true
+    }
+}
+
+function Grant-ObjectAccess {
+    param([string]$Path, [bool]$Directory)
+    # Deliberately only THIS object: no OI/CI propagation through the subtree.
+    $everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+    $rights = [Security.AccessControl.FileSystemRights]::FullControl
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    if ($Directory) {
+        $item = [IO.DirectoryInfo]::new($Path)
+        $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            $everyone, $rights, [Security.AccessControl.InheritanceFlags]::None,
+            [Security.AccessControl.PropagationFlags]::None, $allow)
+        $acl.AddAccessRule($rule)
+        $item.SetAccessControl($acl)
+    }
+    else {
+        $item = [IO.FileInfo]::new($Path)
+        $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($everyone, $rights, $allow)
+        $acl.AddAccessRule($rule)
+        $item.SetAccessControl($acl)
+    }
+}
+
 $script:ACLRepaired = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList ([StringComparer]::OrdinalIgnoreCase)
 $script:RepairedCount = 0
 $script:DeletedCount = 0
@@ -127,8 +316,26 @@ $script:CounterStartFiles = 0
 $script:CounterStartFolders = 0
 $script:CounterStartErrors = 0
 $script:CounterWatch = [Diagnostics.Stopwatch]::StartNew()
+$script:CounterStage = ''
+$script:CounterStageKey = ''
+$script:CounterLastShownStage = ''
+$script:CounterStagesSeen = New-Object 'System.Collections.Generic.HashSet[string]'
 
-# Rewrite only the counter line under the current path (up to four times/sec).
+# Update the current stage before operations which can take a long time.
+function Set-DeletionStage {
+    param([string]$Key)
+    if (-not $script:CounterActive -or $script:CounterStageKey -eq $Key) { return }
+    $script:CounterStageKey = $Key
+    $script:CounterStage = T $Key
+    $firstTime = $script:CounterStagesSeen.Add($Key)
+    if ($firstTime -or
+        ($script:CounterStage -ne $script:CounterLastShownStage -and
+         $script:CounterWatch.ElapsedMilliseconds -ge 1000)) {
+        Update-DeletionCounters -Force
+    }
+}
+
+# Rewrite only the counter line under the current path (normally every 5 sec).
 function Update-DeletionCounters {
     param([switch]$Force)
     if (-not $script:CounterActive) { return }
@@ -138,6 +345,10 @@ function Update-DeletionCounters {
         ($script:DeletedFileCount - $script:CounterStartFiles),
         ($script:DeletedFolderCount - $script:CounterStartFolders),
         ($script:FailureCount - $script:CounterStartErrors)))
+    if ($script:CounterStageKey -in @('StageEnumerating', 'StageOwnership', 'StagePermissions')) {
+        $line = '      ' + $script:CounterStage
+    }
+    $script:CounterLastShownStage = $script:CounterStage
     $script:CounterLineLength = [Math]::Max($script:CounterLineLength, $line.Length)
     Write-Host ("`r" + $line.PadRight($script:CounterLineLength)) -NoNewline
     $script:CounterWatch.Restart()
@@ -168,7 +379,7 @@ function Show-Summary {
                     'Started' { 'ItemInterrupted' }
                     default   { 'ItemNotStarted' }
                 }
-                Write-Host ('{0}. {1} ({2})' -f $item.Number, $item.Path, (T $statusKey)) -ForegroundColor Yellow
+                Write-Host ('{0}. {1} ({2})' -f (Format-Count $item.Number), $item.Path, (T $statusKey)) -ForegroundColor Yellow
             }
         }
         else {
@@ -177,10 +388,6 @@ function Show-Summary {
     }
 
     if ($script:MainError) { Write-Warning $script:MainError }
-    foreach ($failure in $script:FailureSamples) { Write-Warning $failure }
-    if ($script:FailureCount -gt $script:FailureSamples.Count) {
-        Write-Warning (T 'SummaryTruncated')
-    }
 
     Write-Host (T 'SummaryRemovedTargets' -Values @($script:TargetsRemoved))
     Write-Host (T 'SummaryRemovedFiles' -Values @($script:FilesInRemovedTargets))
@@ -189,29 +396,38 @@ function Show-Summary {
     if ($remaining -gt 0 -and $script:Confirmed) {
         Write-Host (T 'SummaryUnstarted' -Values @($remaining)) -ForegroundColor Yellow
     }
+    $finishedAt = Get-Date
+    Write-Host (T 'EndTime' -Values @((Format-RegionalDateTime $finishedAt),
+        (Format-ElapsedTime $script:RunWatch.Elapsed))) -ForegroundColor DarkGray
 }
 function Repair-Access {
     param([string]$Path, [bool]$Directory)
+    # Never change link security (could refer to another drive), protected paths or roots.
+    try {
+        $attr = Get-Attributes -Path $Path
+        if ((Test-IsReparsePoint -Attributes $attr) -or
+            (Test-IsProtected -Path $Path) -or $Path -match '^[A-Za-z]:\\?$') { return $false }
+        if ($script:ACLRepaired.Contains($Path)) { return $true }
 
-    # Never modify the ACL/owner of reparse points, volume roots or protected paths.
-    $attr = Get-Attributes -Path $Path
-    if ((Test-IsReparsePoint -Attributes $attr) -or (Test-IsProtected -Path $Path)) {
-        throw (T 'AccessBlocked' -Values @($Path))
+        # First grant ACL. Only if that fails, take ownership and retry ACL.
+        $granted = $false
+        Set-DeletionStage -Key 'StagePermissions'
+        try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
+        catch { }
+        if (-not $granted) {
+            Set-DeletionStage -Key 'StageOwnership'
+            try { & takeown.exe /F $Path /A 2>&1 | Out-Null } catch { }
+            Set-DeletionStage -Key 'StagePermissions'
+            try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
+            catch { }
+        }
+        if ($granted) {
+            [void]$script:ACLRepaired.Add($Path)
+            $script:RepairedCount++
+        }
+        return $granted
     }
-    if ($script:ACLRepaired.Contains($Path)) { return }
-
-    # Only the selected real object, never /R or /T.
-    & takeown.exe /F $Path /A 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw (T 'TakeOwnershipFailed' -Values @($Path)) }
-    & icacls.exe $Path /inheritance:e /L /Q 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw (T 'InheritanceFailed' -Values @($Path)) }
-    $ace = if ($Directory) { '*S-1-1-0:(OI)(CI)F' } else { '*S-1-1-0:F' }
-    & icacls.exe $Path /grant $ace /L /Q 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw (T 'GrantFailed' -Values @($Path))
-    }
-    [void]$script:ACLRepaired.Add($Path)
-    $script:RepairedCount++
+    finally { Set-DeletionStage -Key 'StageDeleting' }
 }
 
 function Invoke-DeleteLeaf {
@@ -238,12 +454,22 @@ function Add-Failure {
     if ($script:FailureSamples.Count -lt 15) {
         $script:FailureSamples.Add("$Path — $Message")
     }
-    Update-DeletionCounters
+    if ($script:CounterActive) {
+        # Erase the old changing line, print a permanent gray error, resume counters.
+        Write-Host ("`r" + (' ' * $script:CounterLineLength) + "`r") -NoNewline
+        Write-Host ('      ' + (T 'DeleteFailure' -Values @($Path))) -ForegroundColor DarkGray
+        $script:CounterLineLength = 0
+        $script:CounterStage = ''
+        $script:CounterStageKey = 'StageDeleting'
+        Update-DeletionCounters -Force
+    }
+    else {
+        Write-Host (T 'DeleteFailure' -Values @($Path)) -ForegroundColor DarkGray
+    }
 }
 
 function Remove-SafeEntry {
     param([string]$Path)
-    # True means the item itself was removed (false means something remained).
     try { $attr = Get-Attributes -Path $Path }
     catch {
         Add-Failure -Path $Path -Message $_.Exception.Message
@@ -254,16 +480,20 @@ function Remove-SafeEntry {
     $childFailures = $false
 
     if ($directory -and -not $link) {
+        # Check only actual directories, once when entering them (not each file).
+        # Any missing LIST_DIRECTORY or DELETE_CHILD rights are fixed locally.
+        if (-not (Test-DirectoryDeleteAccess -Path $Path)) {
+            [void](Repair-Access -Path $Path -Directory $true)
+        }
+        Set-DeletionStage -Key 'StageEnumerating'
         try {
             $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
         }
         catch {
-            try {
-                Repair-Access -Path $Path -Directory $true
-                $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
-            }
+            [void](Repair-Access -Path $Path -Directory $true)
+            try { $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop) }
             catch {
-                Add-Failure -Path $Path -Message (T 'CantReadDirectory' -Values @($_.Exception.Message))
+                Add-Failure -Path $Path -Message $_.Exception.Message
                 return $false
             }
         }
@@ -273,41 +503,28 @@ function Remove-SafeEntry {
         if ($childFailures) { return $false }
     }
 
-    try {
-        Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link
-    }
+    Set-DeletionStage -Key 'StageDeleting'
+    # Attempt deletion even after unsuccessful access repair.
+    try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
     catch {
-        # For a link, repair only its REAL parent directory, never the link itself.
         $parent = [IO.Path]::GetDirectoryName($Path)
         if ($link) {
+            # Reparse points may be unlinked, but NEVER receive changed ACL/owner.
             if ($parent -and -not (Test-IsProtected -Path $parent)) {
-                try {
-                    Repair-Access -Path $parent -Directory $true
-                    Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $true
-                }
-                catch {
-                    Add-Failure -Path $Path -Message $_.Exception.Message
-                    return $false
-                }
-            }
-            else {
-                Add-Failure -Path $Path -Message (T 'LinkNotDeleted')
-                return $false
+                [void](Repair-Access -Path $parent -Directory $true)
             }
         }
         else {
-            try {
-                if ($parent -and -not (Test-IsProtected -Path $parent)) {
-                    Repair-Access -Path $parent -Directory $true
-                }
-                try {
-                    Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $false
-                }
-                catch {
-                    Repair-Access -Path $Path -Directory $directory
-                    Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $false
-                }
+            # For a failed file or empty directory: first use parent's DELETE_CHILD,
+            # then this object's ACL, changing owner only when needed.
+            if ($parent -and -not (Test-IsProtected -Path $parent)) {
+                [void](Repair-Access -Path $parent -Directory $true)
             }
+        }
+        try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
+        catch {
+            if (-not $link) { [void](Repair-Access -Path $Path -Directory $directory) }
+            try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
             catch {
                 Add-Failure -Path $Path -Message $_.Exception.Message
                 return $false
@@ -317,7 +534,6 @@ function Remove-SafeEntry {
 
     $script:DeletedCount++
     if ($link) { $script:LinkCount++ }
-    # Only regular files count as files; links are distinct objects.
     if (-not $directory -and -not $link) { $script:DeletedFileCount++ }
     if ($directory -and -not $link) { $script:DeletedFolderCount++ }
     Update-DeletionCounters
@@ -342,7 +558,7 @@ function Invoke-Main {
     $inputs = New-Object 'System.Collections.Generic.List[object]'
     while ($true) {
         $number = $inputs.Count + 1
-        $line = (Read-Host ('{0}. {1}' -f $number, (T 'PathPrompt'))).Trim()
+        $line = (Read-Host ('{0}. {1}' -f (Format-Count $number), (T 'PathPrompt'))).Trim()
         if ([string]::IsNullOrWhiteSpace($line)) { break }
         $inputs.Add([pscustomobject]@{ Number = $number; Raw = $line })
         $script:InputCount++
@@ -444,12 +660,16 @@ function Invoke-Main {
         $script:CurrentNumber = $entry.Number
         $script:CurrentTarget = $path
         $entry.State = 'Started'
-        Write-Host ("`n[{0}/{1}] {2} {3} ..." -f $script:StartedCount, $selected.Count, (T 'Removing'), $path) -ForegroundColor Cyan
+        Write-Host ("`n[{0}/{1}] {2} {3} ..." -f (Format-Count $script:StartedCount), (Format-Count $selected.Count), (T 'Removing'), $path) -ForegroundColor Cyan
         $script:CounterStartFiles = $script:DeletedFileCount
         $script:CounterStartFolders = $script:DeletedFolderCount
         $script:CounterStartErrors = $script:FailureCount
         $script:CounterLineLength = 0
         $script:CounterActive = $true
+        $script:CounterStage = ''
+        $script:CounterStageKey = ''
+        $script:CounterLastShownStage = ''
+        $script:CounterStagesSeen.Clear()
         $script:CounterWatch.Restart()
         Update-DeletionCounters -Force
         try {
@@ -501,5 +721,8 @@ finally {
     Finish-DeletionCounters
     # Always show the available summary first, then optionally keep the window open.
     try { Show-Summary }
-    finally { Stop-Utility -Context $utility }
+    finally {
+        if ($script:AuthzReady) { [RemovePathsAuthz]::Dispose() }
+        Stop-Utility -Context $utility
+    }
 }

@@ -72,3 +72,7 @@ forcefully killing a process cannot guarantee an exit summary.
 
 The lifecycle uses `Start-Utility` and `Stop-Utility`. Refer to
 `Common/UTILITY-CONTRACT.md` for the shared contract.
+
+### Access checks and duration
+
+For each real directory, Windows Authz checks listing and child-deletion permissions. If needed, the utility first grants permissions on that object only; if this fails it takes ownership and retries. It does not force recursive inheritance or follow reparse-point targets. Counters refresh every five seconds, with permanent failures shown in gray. Start and end times use the regional format including seconds, and duration includes days when applicable.

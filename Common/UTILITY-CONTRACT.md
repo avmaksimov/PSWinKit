@@ -119,3 +119,7 @@ Omit `-RequireAdministrator` if elevation is not required.
 - Protect running Windows system paths and all of `C:\Users`.
 - Keep README stable (no temporary testing-status notes).
 - Git commits should have short English Title and Description.
+
+## Diagnostics and elapsed time
+
+Remove-Paths checks LIST_DIRECTORY and DELETE_CHILD using Windows AuthzAccessCheck once per real directory. Repairs are local: ACL → ownership → ACL; no recursive ACL replacement. Files are deleted first and repaired only upon failure. Reparse points are never followed. Start/end regional timestamps include seconds; duration is `hh:mm:ss` with grouped days and localized `д`/`d` when needed.
