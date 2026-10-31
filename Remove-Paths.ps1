@@ -120,6 +120,37 @@ $script:MainError = $null
 $script:Confirmed = $false
 $script:SelectedTargets = @()
 $script:CurrentNumber = $null
+$script:DeletedFolderCount = 0
+$script:CounterActive = $false
+$script:CounterLineLength = 0
+$script:CounterStartFiles = 0
+$script:CounterStartFolders = 0
+$script:CounterStartErrors = 0
+$script:CounterWatch = [Diagnostics.Stopwatch]::StartNew()
+
+# Rewrite only the counter line under the current path (up to four times/sec).
+function Update-DeletionCounters {
+    param([switch]$Force)
+    if (-not $script:CounterActive) { return }
+    if (-not $Force -and $script:CounterWatch.ElapsedMilliseconds -lt 5000) { return }
+
+    $line = '      ' + (T 'DeleteCounters' -Values @(
+        ($script:DeletedFileCount - $script:CounterStartFiles),
+        ($script:DeletedFolderCount - $script:CounterStartFolders),
+        ($script:FailureCount - $script:CounterStartErrors)))
+    $script:CounterLineLength = [Math]::Max($script:CounterLineLength, $line.Length)
+    Write-Host ("`r" + $line.PadRight($script:CounterLineLength)) -NoNewline
+    $script:CounterWatch.Restart()
+}
+
+function Finish-DeletionCounters {
+    if (-not $script:CounterActive) { return }
+    try { Update-DeletionCounters -Force }
+    finally {
+        Write-Host ''
+        $script:CounterActive = $false
+    }
+}
 
 function Show-Summary {
     Write-Host "`n$(Get-UtilityMessage -Key 'Common.SummaryTitle' -Messages $UtilityMessages)" -ForegroundColor Cyan
@@ -207,6 +238,7 @@ function Add-Failure {
     if ($script:FailureSamples.Count -lt 15) {
         $script:FailureSamples.Add("$Path — $Message")
     }
+    Update-DeletionCounters
 }
 
 function Remove-SafeEntry {
@@ -287,6 +319,8 @@ function Remove-SafeEntry {
     if ($link) { $script:LinkCount++ }
     # Only regular files count as files; links are distinct objects.
     if (-not $directory -and -not $link) { $script:DeletedFileCount++ }
+    if ($directory -and -not $link) { $script:DeletedFolderCount++ }
+    Update-DeletionCounters
     return $true
 }
 
@@ -304,6 +338,7 @@ function Invoke-Main {
     Write-Host (T 'Instructions')
     Write-Host (T 'Protection') -ForegroundColor DarkGray
 
+    Write-Host ''
     $inputs = New-Object 'System.Collections.Generic.List[object]'
     while ($true) {
         $number = $inputs.Count + 1
@@ -388,6 +423,7 @@ function Invoke-Main {
     }
 
     $script:Phase = T 'PhaseConfirmation'
+    Write-Host ''
     while ($true) {
         $answer = (Read-Host ((T 'Confirm') + ' ' + (Get-UtilityMessage -Key 'Common.YesNo' -Messages $UtilityMessages))).Trim()
         if ($answer -match '^[YyNn]$') { break }
@@ -408,10 +444,18 @@ function Invoke-Main {
         $script:CurrentNumber = $entry.Number
         $script:CurrentTarget = $path
         $entry.State = 'Started'
-        Write-Host ("`n{0}. {1}" -f $entry.Number, (T 'Removing')) -ForegroundColor Cyan
+        Write-Host ("`n[{0}/{1}] {2} {3} ..." -f $script:StartedCount, $selected.Count, (T 'Removing'), $path) -ForegroundColor Cyan
+        $script:CounterStartFiles = $script:DeletedFileCount
+        $script:CounterStartFolders = $script:DeletedFolderCount
+        $script:CounterStartErrors = $script:FailureCount
+        $script:CounterLineLength = 0
+        $script:CounterActive = $true
+        $script:CounterWatch.Restart()
+        Update-DeletionCounters -Force
         try {
             [void](Get-ValidatedPath -InputPath $path)
             if (Remove-SafeEntry -Path $path) {
+                Finish-DeletionCounters
                 Write-Host (T 'Deleted') -ForegroundColor Green
                 $entry.State = 'Removed'
                 $script:TargetsRemoved++
@@ -422,6 +466,7 @@ function Invoke-Main {
             else {
                 $entry.State = 'Failed'
                 $script:TargetsFailed++
+                Finish-DeletionCounters
                 Write-Warning (T 'PartialWarning')
             }
         }
@@ -429,7 +474,12 @@ function Invoke-Main {
             $entry.State = 'Failed'
             $script:TargetsFailed++
             Add-Failure -Path $path -Message $_.Exception.Message
+            Finish-DeletionCounters
             Write-Warning (T 'FailedWarning' -Values @($path))
+        }
+        finally {
+            # Also close the counter line if Ctrl+C interrupts this target.
+            Finish-DeletionCounters
         }
         $script:CurrentTarget = $null
         $script:CurrentNumber = $null
@@ -448,6 +498,7 @@ catch {
     Write-Host "`n$script:MainError" -ForegroundColor Red
 }
 finally {
+    Finish-DeletionCounters
     # Always show the available summary first, then optionally keep the window open.
     try { Show-Summary }
     finally { Stop-Utility -Context $utility }
