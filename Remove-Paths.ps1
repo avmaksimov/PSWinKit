@@ -57,7 +57,7 @@ function Format-ElapsedTime {
     }
     return $clock
 }
-Write-Host (T 'StartTime' -Values @((Format-RegionalDateTime $script:StartedAt))) -ForegroundColor DarkGray
+Write-Host (T 'StartTime' -Values @((Format-RegionalDateTime $script:StartedAt))) -ForegroundColor Gray
 
 function Test-IsWithin {
     param([string]$Path, [string]$Base)
@@ -437,9 +437,10 @@ function Show-Summary {
     if ($remaining -gt 0 -and $script:Confirmed) {
         Write-Host (T 'SummaryUnstarted' -Values @($remaining)) -ForegroundColor Yellow
     }
+    Write-Host ''
     $finishedAt = Get-Date
     Write-Host (T 'EndTime' -Values @((Format-RegionalDateTime $finishedAt),
-        (Format-ElapsedTime $script:RunWatch.Elapsed))) -ForegroundColor DarkGray
+        (Format-ElapsedTime $script:RunWatch.Elapsed))) -ForegroundColor Gray
 }
 function Repair-Access {
     param([string]$Path, [bool]$Directory)
