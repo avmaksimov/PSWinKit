@@ -10,6 +10,10 @@ param(
     [switch]$PauseOnExit
 )
 
+# Measure overall runtime independently of individual target durations.
+$script:StartedAt = Get-Date
+$script:RunWatch = [Diagnostics.Stopwatch]::StartNew()
+
 . (Join-Path $PSScriptRoot 'Common\Utility.ps1')
 $utility = Start-Utility -ScriptPath $PSCommandPath -Section 'RemovePaths' `
     -LanguageFile $LanguageFile -PauseOnExit:$PauseOnExit -RequireAdministrator
@@ -38,8 +42,6 @@ function T {
 
 
 # Regional date/time (including seconds); days in the elapsed time are localized.
-$script:StartedAt = Get-Date
-$script:RunWatch = [Diagnostics.Stopwatch]::StartNew()
 function Format-RegionalDateTime {
     param([datetime]$Value)
     $culture = [Globalization.CultureInfo]::CurrentCulture
@@ -702,6 +704,7 @@ function Invoke-Main {
     $script:Phase = T 'PhaseDeletion'
     $script:Confirmed = $true
     foreach ($entry in $selected) {
+        $targetWatch = [Diagnostics.Stopwatch]::StartNew()
         $path = $entry.Path
         $script:StartedCount++
         $filesBefore = $script:DeletedFileCount
@@ -725,7 +728,8 @@ function Invoke-Main {
             [void](Get-ValidatedPath -InputPath $path)
             if (Remove-SafeEntry -Path $path) {
                 Finish-DeletionCounters
-                Write-Host (T 'Deleted') -ForegroundColor Green
+                $targetWatch.Stop()
+                Write-Host (T 'Deleted' -Values @((Format-ElapsedTime $targetWatch.Elapsed))) -ForegroundColor Green
                 $entry.State = 'Removed'
                 $script:TargetsRemoved++
                 # Count regular files only inside targets that were fully removed.
@@ -736,7 +740,8 @@ function Invoke-Main {
                 $entry.State = 'Failed'
                 $script:TargetsFailed++
                 Finish-DeletionCounters
-                Write-Warning (T 'PartialWarning')
+                $targetWatch.Stop()
+                Write-Warning (T 'PartialWarning' -Values @((Format-ElapsedTime $targetWatch.Elapsed)))
             }
         }
         catch {
@@ -744,7 +749,8 @@ function Invoke-Main {
             $script:TargetsFailed++
             Add-Failure -Path $path -Message $_.Exception.Message
             Finish-DeletionCounters
-            Write-Warning (T 'FailedWarning' -Values @($path))
+            $targetWatch.Stop()
+            Write-Warning (T 'FailedWarning' -Values @($path, (Format-ElapsedTime $targetWatch.Elapsed)))
         }
         finally {
             # Also close the counter line if Ctrl+C interrupts this target.
