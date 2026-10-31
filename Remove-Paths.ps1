@@ -452,7 +452,14 @@ function Invoke-DeleteLeaf {
     }
     elseif ($Directory) {
         # The tree has already been traversed by us. Never use -Recurse here.
-        [IO.Directory]::Delete($Path)
+        try { [IO.Directory]::Delete($Path) }
+        catch {
+            # Unlike Remove-Item -Force, Directory.Delete may reject ReadOnly directories.
+            $attributes = [IO.File]::GetAttributes($Path)
+            if (($attributes -band [IO.FileAttributes]::ReadOnly) -eq 0) { throw }
+            [IO.File]::SetAttributes($Path, ($attributes -band (-bnot [IO.FileAttributes]::ReadOnly)))
+            [IO.Directory]::Delete($Path)
+        }
     }
     else {
         Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
@@ -461,6 +468,7 @@ function Invoke-DeleteLeaf {
 
 function Add-Failure {
     param([string]$Path, [string]$Message)
+    $Message = $Message -replace '[\r\n]+', ' '
     $script:FailureCount++
     if ($script:FailureSamples.Count -lt 15) {
         $script:FailureSamples.Add("$Path — $Message")
@@ -468,7 +476,7 @@ function Add-Failure {
     if ($script:CounterActive) {
         # Erase the old changing line, print a permanent gray error, resume counters.
         Write-Host ("`r" + (' ' * $script:CounterLineLength) + "`r") -NoNewline
-        Write-Host ('      ' + (T 'DeleteFailure' -Values @($Path))) -ForegroundColor DarkGray
+        Write-Host ('      ' + (T 'DeleteFailure' -Values @($Message, $Path))) -ForegroundColor DarkGray
         $script:CounterLineLength = 0
         $script:CounterStage = ''
         $script:CounterStageKey = 'StageDeleting'
@@ -476,7 +484,7 @@ function Add-Failure {
         Update-DeletionCounters -Force
     }
     else {
-        Write-Host (T 'DeleteFailure' -Values @($Path)) -ForegroundColor DarkGray
+        Write-Host (T 'DeleteFailure' -Values @($Message, $Path)) -ForegroundColor DarkGray
     }
 }
 

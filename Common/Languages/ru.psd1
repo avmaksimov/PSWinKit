@@ -53,7 +53,7 @@
         StartTime           = 'Начало: {0}'
         EndTime             = 'Окончание: {0}, длительность: {1}'
         AuthzUnavailable     = 'Проверка прав через Authz недоступна; используется обычный режим удаления.'
-        DeleteFailure       = 'Не удалось удалить: {0}'
+        DeleteFailure       = 'Не удалось удалить [{0}]: {1}'
         DeleteCounters      = 'Файлов: {0}, папок: {1}, ошибок: {2}'
         StagePreparing      = 'Подготовка...'
         StageEnumerating    = 'Обход каталога'

@@ -53,7 +53,7 @@
         StartTime           = 'Started: {0}'
         EndTime             = 'Finished: {0}, duration: {1}'
         AuthzUnavailable     = 'Authz permission checks are unavailable; using ordinary deletion attempts.'
-        DeleteFailure       = 'Could not delete: {0}'
+        DeleteFailure       = 'Could not delete [{0}]: {1}'
         DeleteCounters      = 'Files: {0}, folders: {1}, errors: {2}'
         StagePreparing      = 'Preparing...'
         StageEnumerating    = 'Enumerating directory'
