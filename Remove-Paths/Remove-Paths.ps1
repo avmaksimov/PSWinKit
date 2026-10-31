@@ -1,22 +1,12 @@
 ﻿#requires -Version 5.1
 <#
-Remove-Paths.ps1 (Windows 10+, Windows PowerShell 5.1)
-Run without arguments, optionally -LanguageFile for translation override.
-Common/Utility.ps1 provides UAC, locale selection, header and exit pause.
-The utility itself is relaunched after UAC; no host-process flags are needed.
+Remove-Paths: interactive permanent deletion.
+Requires Windows PowerShell 5.1 and Common/Common.ps1 in the sibling folder.
+No mandatory or utility-specific command-line parameters.
 #>
-param(
-    [string]$LanguageFile,
-    [switch]$PauseOnExit
-)
 
-# Measure overall runtime independently of individual target durations.
-$script:StartedAt = Get-Date
-$script:RunWatch = [Diagnostics.Stopwatch]::StartNew()
-
-. (Join-Path $PSScriptRoot 'Common\Utility.ps1')
-$utility = Start-Utility -ScriptPath $PSCommandPath -Section 'RemovePaths' `
-    -LanguageFile $LanguageFile -PauseOnExit:$PauseOnExit -RequireAdministrator
+. (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
 if ($null -eq $utility) { return }
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +18,7 @@ function Format-Count {
     return $Value.ToString('N0', [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ')
 }
 
-# Get-UtilityMessage is provided by the dot-sourced common library.
+# Utility-specific translations are available in $utility.Messages.
 function T {
     param([string]$Key, [object[]]$Values = @())
     $formatted = @(
@@ -37,27 +27,25 @@ function T {
             else { $value }
         }
     )
-    return (Get-UtilityMessage -Key ("RemovePaths.$Key") -Messages $UtilityMessages -Values $formatted)
+    if (-not $UtilityMessages.ContainsKey($Key)) { throw "Missing Remove-Paths translation: $Key" }
+    $template = [string]$UtilityMessages[$Key]
+    if ($formatted.Count -eq 0) { return $template }
+    return [string]::Format([Globalization.CultureInfo]::InvariantCulture, $template, [object[]]$formatted)
 }
 
 
-# Regional date/time (including seconds); days in the elapsed time are localized.
-function Format-RegionalDateTime {
-    param([datetime]$Value)
-    $culture = [Globalization.CultureInfo]::CurrentCulture
-    return ($Value.ToString('d', $culture) + ' ' + $Value.ToString('T', $culture))
-}
+# Per-target duration uses the same regional separator as Common.
 function Format-ElapsedTime {
     param([TimeSpan]$Value)
-    $clock = '{0:00}:{1:00}:{2:00}' -f $Value.Hours, $Value.Minutes, $Value.Seconds
+    $separator = [Globalization.CultureInfo]::CurrentCulture.DateTimeFormat.TimeSeparator
+    $clock = '{0:00}{3}{1:00}{3}{2:00}' -f $Value.Hours, $Value.Minutes, $Value.Seconds, $separator
     $days = [long][Math]::Floor($Value.TotalDays)
     if ($days -gt 0) {
-        $suffix = if ($utility.LanguageFile -match '(?i)[\/]ru(?:-[^\/]+)?\.psd1$') { 'д' } else { 'd' }
+        $suffix = [string]$UtilityMessages.DaySuffix
         return ((Format-Count $days) + $suffix + ' ' + $clock)
     }
     return $clock
 }
-Write-Host (T 'StartTime' -Values @((Format-RegionalDateTime $script:StartedAt))) -ForegroundColor Gray
 
 function Test-IsWithin {
     param([string]$Path, [string]$Base)
@@ -405,7 +393,7 @@ function Finish-DeletionCounters {
 }
 
 function Show-Summary {
-    Write-Host "`n$(Get-UtilityMessage -Key 'Common.SummaryTitle' -Messages $UtilityMessages)" -ForegroundColor Cyan
+    Write-Host "`n$(T 'SummaryTitle')" -ForegroundColor Cyan
     Write-Host (T 'SummaryResult' -Values @($script:Result))
 
     # Do not repeat successfully deleted paths. Show only those still remaining,
@@ -437,10 +425,6 @@ function Show-Summary {
     if ($remaining -gt 0 -and $script:Confirmed) {
         Write-Host (T 'SummaryUnstarted' -Values @($remaining)) -ForegroundColor Yellow
     }
-    Write-Host ''
-    $finishedAt = Get-Date
-    Write-Host (T 'EndTime' -Values @((Format-RegionalDateTime $finishedAt),
-        (Format-ElapsedTime $script:RunWatch.Elapsed))) -ForegroundColor Gray
 }
 function Repair-Access {
     param([string]$Path, [bool]$Directory)
@@ -594,7 +578,6 @@ function Remove-SafeEntry {
 function Invoke-Main {
     $script:Phase = T 'PhaseEntry'
     # Warn before reading even the first path.
-    Write-Host ''
     Write-Host ('!' * 68) -ForegroundColor Red
     Write-Host (T 'WarningTitle') -ForegroundColor Red
     Write-Host (T 'WarningPermanence') -ForegroundColor Yellow
@@ -692,9 +675,9 @@ function Invoke-Main {
     $script:Phase = T 'PhaseConfirmation'
     Write-Host ''
     while ($true) {
-        $answer = (Read-Host ((T 'Confirm') + ' ' + (Get-UtilityMessage -Key 'Common.YesNo' -Messages $UtilityMessages))).Trim()
+        $answer = (Read-Host ((T 'Confirm') + ' ' + (T 'YesNo'))).Trim()
         if ($answer -match '^[YyNn]$') { break }
-        Write-Host (Get-UtilityMessage -Key 'Common.InvalidYesNo' -Messages $UtilityMessages) -ForegroundColor Yellow
+        Write-Host (T 'InvalidYesNo') -ForegroundColor Yellow
     }
     if ($answer -ieq 'N') {
         $script:Result = T 'StatusCancelled'
@@ -761,7 +744,7 @@ function Invoke-Main {
         $script:CurrentNumber = $null
     }
 
-    $script:Result = if ($script:TargetsFailed -eq 0) { Get-UtilityMessage -Key 'Common.Completed' -Messages $UtilityMessages } else { T 'StatusPartial' }
+    $script:Result = if ($script:TargetsFailed -eq 0) { T 'Completed' } else { T 'StatusPartial' }
     $script:Phase = T 'PhaseDone'
 }
 
@@ -779,6 +762,6 @@ finally {
     try { Show-Summary }
     finally {
         if ($script:AuthzReady) { [RemovePathsAuthz]::Dispose() }
-        Stop-Utility -Context $utility
+        Stop-Utility -Utility $utility
     }
 }

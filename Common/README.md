@@ -1,125 +1,207 @@
-﻿# Shared PowerShell utility contract
+# PSWinKit — PowerShell utility development contract
 
-## Scope
+**Version 1.1 (Start-Utility / Stop-Utility, regional formatting)**
+**Status: agreed architecture contract.**
+This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, future `WinRepair` and `WinRE-Manager`, and all subsequent PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
 
-- Windows 10+, Windows PowerShell 5.1, x86/x64.
-- Dot-source `Common/Utility.ps1` as a function library; no separate host process.
-- No mandatory CLI options; elevation, language, header and exit handling are shared.
-- `.ps1` / `.psd1` files must use UTF-8 with BOM for Windows PowerShell 5.1.
-- Public lifecycle functions are **`Start-Utility`** and **`Stop-Utility`**;
-  the library also provides the `Get-UtilityMessage` helper.
+## 1. Scope and design principles
 
-## Layout
+- Every utility must work fully **without mandatory command-line parameters**. Utility-specific optional parameters are allowed.
+- Language selection, title, elevation, overall timing and shutdown live in `Common/Common.ps1`.
+- Each utility owns its actual work, warnings, progress and final statistics.
+- Do not create `UtilityHost`, `ElevatedHost` or other wrapper processes: UAC restarts the **main PS1 script itself**.
+- Do not move utility-specific logic into Common or add speculative architectural complexity.
+- This contract states the intended behavior; implementation must be verified on supported Windows versions.
+
+## 2. Compatibility and file encoding
+
+Baseline: **Windows 10+, Windows Server 2016+, Windows PowerShell 5.1**; x86/x64 where supported. Neither PowerShell 7+, unsupported legacy operating systems nor third-party dependencies may be required by the shared library.
+
+All `.ps1` and `.psd1` files must use **UTF-8 with BOM**. Documentation is in Markdown, with equivalent English and Russian content.
+
+## 3. Repository layout
 
 ```text
-Remove-Paths.ps1
-WinRE-Manager.ps1         # future integration
-WinRepair.ps1             # future integration
-Common/
-  Utility.ps1
-  Languages/
-    en.psd1
-    ru.psd1
-  UTILITY-CONTRACT.md
-  UTILITY-CONTRACT.ru.md
+PSWinKit/
+├── README.md
+├── README.ru.md
+├── LICENSE
+├── .gitattributes
+├── .gitignore
+├── Common/
+│   ├── Common.ps1
+│   ├── README.md
+│   ├── README.ru.md
+│   └── Languages/
+│       ├── en.psd1
+│       └── ru.psd1
+└── Remove-Paths/
+    ├── Remove-Paths.ps1
+    ├── README.md
+    ├── README.ru.md
+    └── Languages/
+        ├── en.psd1
+        └── ru.psd1
 ```
 
-## Utility template
+Future utilities each get a separate directory following the same pattern. The shared library is dot-sourced relative to the utility's `$PSScriptRoot`:
 
 ```powershell
-param(
-    [string]$LanguageFile,
-    [switch]$PauseOnExit
-)
+. (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+```
 
-. (Join-Path $PSScriptRoot 'Common\Utility.ps1')
+Never copy Common into utility folders or locate resources using the current working directory.
 
-$utility = Start-Utility -ScriptPath $PSCommandPath -Section 'RemovePaths' `
-    -LanguageFile $LanguageFile -PauseOnExit:$PauseOnExit -RequireAdministrator
+## 4. Main utility parameters
 
+Running without any parameters is mandatory:
+
+```powershell
+.\Remove-Paths.ps1
+```
+
+Own optional parameters such as `[string[]]$Paths` or `[switch]$DryRun` are allowed. Main utilities **do not need to declare** `LanguageFile`, `PauseOnExit`, `RequireAdministrator` or `ScriptArguments` just for Common. The last name is not a Common API parameter.
+
+For UAC relaunch, Common obtains the **direct caller script's** `$PSBoundParameters` via `Get-Variable -Name PSBoundParameters -Scope 1`, at the very beginning of `Start-Utility`. Therefore `Start-Utility` must be called **at top level in the main script**, never from an extra wrapper function.
+
+Explicitly supplied values of `String`, `Boolean`, `SwitchParameter`, ordinary numeric types, and their one-dimensional arrays are preserved, including an explicit `$false`, an empty string and empty arrays. Defaults that were not explicitly bound are recalculated by the utility. Complex objects, `SecureString`, `PSCredential`, `ScriptBlock`, secrets and arbitrary object types are **not universally supported**; report an understandable error **before** relaunch rather than silently dropping arguments. Unbound positional arguments, `$args`, pipeline input and arbitrary process state are not automatically transferred.
+
+## 5. Public functions
+
+Common exposes **two public functions**:
+
+| Function | Purpose |
+| --- | --- |
+| `Start-Utility` | Launch parameters, language, optional UAC, header and start time |
+| `Stop-Utility` | Finish time, overall duration and final pause |
+
+Internal helpers are allowed but must not become a required public API. A separate `Get-UtilityMessage` function is unnecessary: utility translations are accessed via `$utility.Messages`.
+
+## 6. Start-Utility
+
+A typical call for a tool that requires administrative rights:
+
+```powershell
+$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
 if ($null -eq $utility) { return }
+```
 
-$messages = $utility.Messages
-try {
-    # Utility logic and its own error handling
-}
-finally {
-    # Utility-specific final summary
-    Stop-Utility -Context $utility
+For a utility that does not need elevation, omit `-RequireAdministrator`.
+
+| Parameter | Type | Required | Default |
+| --- | --- | --- | --- |
+| `ScriptPath` | `[string]` | Yes | — |
+| `RequireAdministrator` | `[switch]` | No | `$false` |
+| `LanguageFile` | `[string]` | No | Unspecified |
+| `PauseOnExit` | `[switch]` | No | `$false` |
+
+`ScriptPath` is the main script's `$PSCommandPath`. It determines the utility folder, `Languages`, title and UAC relaunch target. No `Utility`, `Program` or `Section` parameter is used.
+
+**RequireAdministrator.** Check the actual elevated token (the Administrators role enabled in that token), not merely group membership. Request UAC only when required and not already elevated. The elevated process rechecks the token.
+
+**LanguageFile.** Optional developer-level override when calling `Start-Utility`. By default, `Get-UICulture` determines the file: specific culture (`ru-RU.psd1`) → parent (`ru.psd1`) → required `en.psd1`. Explicit relative paths are resolved against the **main script's folder**. A missing file or non-PSD1 path is an initialization error. Preserve the chosen file across UAC even if another account has a different Windows UI language. A main utility need not expose its own `-LanguageFile` parameter.
+
+**PauseOnExit.** Optional forced final pause. Pausing is also mandatory for interactive windows opened by Common through UAC; an existing terminal should not pause unnecessarily. Detection of launches from Explorer is best-effort only. Noninteractive usage should not intentionally block. UAC cancellation causes no pause.
+
+**Return value.** On success, return `$utility`, holding `StartedAt`, a timer, `Messages`, the selected language, and pause state. If execution is delegated to an elevated process or UAC is canceled, return `$null`: the original script must return immediately **without its summary or Stop-Utility**. Other initialization errors are reported separately.
+
+## 7. Header and start time
+
+As soon as the actual worker has passed its privilege check, `Start-Utility` records start time and starts an independent monotonic `Stopwatch`, before the title and utility work. Waiting for UAC in the original process is not counted. The title is read from `Title` in the **utility's** translations; the `Started` label belongs exclusively to Common:
+
+```text
+=== Remove files and directories ===
+Started: 10/31/2026 10:42:39 PM
+
+```
+
+One blank line follows these two lines. The utility must not print another common title or start time. **Date and time use Windows regional `CurrentCulture` settings**, with seconds, independently of the UI language. The example is illustrative, not a fixed date pattern.
+
+## 8. UAC elevation
+
+1. Decide whether elevation is required and whether the token is already elevated.
+2. If elevation is needed, capture the main script's explicitly bound parameters directly in `Start-Utility` and validate supported types.
+3. Serialize arguments with `System.Management.Automation.PSSerializer`, preserving their values and types.
+4. Build a command that invokes the **same main PS1**, keeping filenames, strings and parameters out of executable source. `powershell.exe -EncodedCommand` with UTF-16LE is allowed; Base64 is **not encryption**.
+5. Use `Start-Process -Verb RunAs` with the same PowerShell architecture; reconstruct values using splatting. Carry the selected language and pause state through Common's internal mechanism, not new mandatory main-script arguments.
+6. The original process returns `$null` after successful launch. The elevated script dot-sources Common and calls `Start-Utility` again.
+
+Security rules: no `Invoke-Expression`, no unescaped user strings inserted as code, support spaces, apostrophes, quotes and non-ASCII paths, check command length, and avoid temporary files where possible. Never pass secrets on the command line. Keep x86/x64 architecture unchanged unless there is a specific need; preserve working directory where possible, noting that mapped network drives may not exist in the elevated context. **Do not use `-ExecutionPolicy Bypass` or override PowerShell execution policies.** The elevated utility must revalidate destructive inputs and protected paths.
+
+If UAC is canceled (`ERROR_CANCELLED`, 1223), the original invocation exits without the operation, summary, pause or a fabricated deletion failure. Other launch errors must be diagnosed explicitly.
+
+## 9. Localization and ownership
+
+`Common/Languages/en.psd1` and `ru.psd1` contain **only Common lifecycle messages**: `Started`, `Finished`, `Duration`, `DaySuffix`, UAC and pause prompts. Each utility has its own flat `Languages/en.psd1` and `ru.psd1`, containing `Title` and specific messages. Example:
+
+```powershell
+# Remove-Paths/Languages/en.psd1
+@{
+    Title = 'Remove files and directories'
+    WarningTitle = 'WARNING! PERMANENT DELETION!'
 }
 ```
 
-`-Section` identifies a PSD1 section with a `Title` message.
-Omit `-RequireAdministrator` if elevation is not required.
+`Start-Utility` chooses translations using the Windows UI culture. If the chosen language lacks a key, use the **English PSD1 from the same scope**. If English also lacks the key, report an error rather than silently producing an empty string. **Do not merge Common and utility dictionaries.** Utility messages are available through `$utility.Messages` as templates suitable for `-f` or `[string]::Format`. Utilities must not directly read internal Common translation keys. Repeating short phrases between utility files is acceptable.
 
-## Start-Utility
+**Separate regional rule:** `CurrentCulture` determines formatting of dates, times and durations; `Get-UICulture` determines the language of labels. A Russian UI may use English regional dates. The hour/minute/second separator in durations comes from the regional time format. For one day or longer, display a day count with a localized suffix (`1d 03:24:15` or `1д 03:24:15`; the colons are illustrative). Utilities with per-operation timing follow the same rule. **Do not hard-code** `dd.MM.yyyy HH:mm:ss` or `d.hh:mm:ss` as universal formats.
 
-- Selects the UI language with `Get-UICulture` or respects an explicitly
-  selected PSD1, checks administrator privileges and requests UAC if needed.
-- With sufficient rights, loads exactly one PSD1, prints the shared title,
-  and returns a context containing `LanguageFile`, `Messages`, `PauseOnExit`.
-- After launching an elevated copy, returns **`$null`**; the original script
-  returns without doing any utility work or calling `Stop-Utility`.
-- When UAC is declined (`ERROR_CANCELLED`, 1223), also returns **`$null`**;
-  there is no work, summary, or exit prompt.
-- Other elevation or startup errors are **not** swallowed: they throw.
-- Relaunches only the utility, passing the absolute `-LanguageFile` and
-  `-PauseOnExit`. Resolving the language before UAC preserves the original
-  user's UI language even if alternate administrator credentials are used.
-- No serialized tables or interprocess object transfer is involved.
-- An already elevated process is never relaunched unnecessarily.
+## 10. Stop-Utility
 
-## Stop-Utility
+```powershell
+Stop-Utility -Utility $utility
+```
 
-- Call only after successful initialization, normally in `finally` after the
-  utility's summary.
-- Optionally wait for a key when opened from Explorer or when
-  `-PauseOnExit` was requested; never pause an existing terminal otherwise.
-- Never call after UAC refusal.
+The required `Utility` argument is the object returned by `Start-Utility`. Do not pass the script path, language or title again. `Stop-Utility` records the finish time and stops the global timer **immediately on invocation**. After the utility's own summary, it prints **one blank line** and two shared lines in light gray (`Gray`):
 
-## Parameters
+```text
+Finished: 10/31/2026 10:43:12 PM
+Duration: 00:00:33
+```
 
-- Every utility explicitly declares `[string]$LanguageFile` and
-  `[switch]$PauseOnExit` — normal, transparent PowerShell parameter binding.
-- Explicit `-LanguageFile` accepts a PSD1 filename within `Common/Languages`
-  or an absolute file path; missing/non-PSD1 files are errors.
-- `-PauseOnExit` is normally internal but may be supplied by the user.
-- UAC relaunch uses `Start-Process -Verb RunAs` on the utility, not on the library.
+Date/time and duration follow section 9. The word “Finished” is neutral; it does not assert that every action succeeded. Results, errors and numeric statistics are emitted by the utility itself **before** calling `Stop-Utility`. Any necessary final pause follows these two lines. Common does not print an additional summary.
 
-## PSD1 resource files
+Call `Stop-Utility` only after a successful `Start-Utility`, preferably in `finally`. An ordinary Ctrl+C may still unwind through `finally`; forcibly killing the process cannot guarantee execution.
 
-- Native loading with `Import-PowerShellDataFile -LiteralPath`; no custom INI parser.
-- Full UI culture → parent/neutral cultures → mandatory `en.psd1`.
-  Example: `ru-RU.psd1` → `ru.psd1` → `en.psd1`.
-- Exactly one file is loaded, and English is always the fallback.
-- The package includes `ru.psd1` and `en.psd1` for now. Keep keys and sections
-  consistent when adding languages.
-- `Common` holds truly shared strings, `Host` elevation/pause strings, and
-  each utility has its own section (`RemovePaths`, `WinREManager`, `WinRepair`).
-- Use Latin section/key names, single-quoted strings, doubled apostrophes,
-  and positional `String.Format` placeholders `{0}`, `{1}`, etc.
-- The utility uses `$utility.Messages`; no redundant PSD1 loading is needed.
+## 11. Utility template
 
-## Errors and safety
+```powershell
+#requires -Version 5.1
+# Optional utility-specific parameters (if any) go here.
 
-- Dangerous operations require a preview and `Y/N` confirmation with no default.
-- Permanent deletion must show a prominent warning before path input and
-  require explicit confirmation before making changes.
-- Remove-Paths numbers input paths and ends entry on a blank Enter. The
-  pre-deletion preview shows counts and skipped-input reasons by number, without
-  repeating paths. The final summary shows only incomplete paths with original
-  input numbers and names, then counts fully deleted paths, regular files
-  deleted within them, and paths skipped during validation. Directory and
-  reparse-point links are not counted as files; partially deleted targets do
-  not contribute to the completed-file total.
-- Each utility owns its `finally` summary; ordinary Ctrl+C allows best-effort
-  stack unwinding and summary, unlike forceful process termination.
-- Never traverse NTFS junctions, symlinks or mount points when deleting or
-  changing owners and ACLs. Unlink only the reparse-point object itself.
-- Protect running Windows system paths and all of `C:\Users`.
-- Keep README stable (no temporary testing-status notes).
-- Git commits should have short English Title and Description.
+. (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
+if ($null -eq $utility) { return }
 
-## Diagnostics and elapsed time
+try {
+    Write-Host $utility.Messages.WarningTitle
+    # Utility-owned work.
+}
+catch {
+    # Utility-owned error reporting.
+}
+finally {
+    # The utility's summary comes first, if applicable.
+    Stop-Utility -Utility $utility
+}
+```
 
-Remove-Paths checks LIST_DIRECTORY and DELETE_CHILD using Windows AuthzAccessCheck once per real directory. Repairs are local: ACL → ownership → ACL; no recursive ACL replacement. Files are deleted first and repaired only upon failure. Reparse points are never followed. Start/end regional timestamps include seconds; duration is `hh:mm:ss` with grouped days and localized `д`/`d` when needed.
+Omit `-RequireAdministrator` for utilities that do not require it. Call `Start-Utility` directly at top level in the main script to capture bound parameters for UAC correctly.
+
+## 12. Documentation
+
+- **Repository root:** `README.md` and `README.ru.md` introduce the collection, available/planned utilities, requirements, license and links.
+- **Common:** these two README files are the **complete technical contract**: public API, UAC, localization, timing and lifecycle. Do **not** create separate `CONTRACT.md`, `UTILITY-CONTRACT.md` or translated duplicates.
+- **Each utility:** its own `README.md` and `README.ru.md` describe purpose, features, use, optional parameters, examples, limitations and warnings.
+
+Avoid copying the full contract into root or utility README files; link to it instead.
+
+## 13. Development rules
+
+Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not change an agreed deletion or repair algorithm for cosmetic refactoring. Preserve native console output from `DISM`, `SFC`, `CHKDSK` and similar tools where practical. Prefer PSD1 for configuration and localization and JSON for machine-updated state. Check and diagnose critical operations. Suggest short English **Title** and **Description** for Git commits.
+
+## 14. Contract changes
+
+When changing Common, preserve compatibility or explicitly agree on a break; update **both** `Common/README.*` documents, and root/affected-utility READMEs when relevant; validate on actual Windows PowerShell 5.1. Requirements specific to a single utility belong in its own README and do not automatically become shared policy.
+
+**Core principle:** common infrastructure, independent utilities, no mandatory parameters, minimal complexity.

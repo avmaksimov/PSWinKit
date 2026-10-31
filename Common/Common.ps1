@@ -1,21 +1,21 @@
 ﻿#requires -Version 5.1
 <#
-Shared utility functions (dot-source from the main script).
-The utility itself is relaunched for UAC; the library never launches itself.
+PSWinKit shared lifecycle (Windows PowerShell 5.1).
+Public interface: Start-Utility, Stop-Utility.
+All other functions below are internal implementation details.
 #>
 
-# Capture the common directory while this file is dot-sourced.
-$script:UtilityCommonRoot = $PSScriptRoot
+$script:PSWinKitCommonRoot = $PSScriptRoot
 
-function Test-UtilityAdministrator {
+function Test-PSWinKitAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    # Under UAC a filtered, unelevated administrator token does not have this role enabled.
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Test-UtilityStandaloneLaunch {
-    # Explorer launch usually owns a short-lived console.
-    # Parent process information is not proof of console ownership.
+function Test-PSWinKitStandalone {
+    # Best effort only; Explorer launches normally need a final pause.
     try {
         $current = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
         if (-not $current -or -not $current.ParentProcessId) { return $false }
@@ -27,134 +27,246 @@ function Test-UtilityStandaloneLaunch {
     catch { return $false }
 }
 
-function Resolve-UtilityLanguageFile {
-    param([string]$Requested)
-
-    $languages = Join-Path $script:UtilityCommonRoot 'Languages'
-    if (-not [string]::IsNullOrWhiteSpace($Requested)) {
-        $path = if ([IO.Path]::IsPathRooted($Requested)) {
-            [IO.Path]::GetFullPath($Requested)
+function Find-PSWinKitLanguageFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Folder,
+        [string]$Language,
+        [switch]$Explicit
+    )
+    if ($Explicit) {
+        $resolved = if ([IO.Path]::IsPathRooted($Language)) {
+            [IO.Path]::GetFullPath($Language)
         }
-        else { [IO.Path]::GetFullPath((Join-Path $languages $Requested)) }
-        if (-not [IO.File]::Exists($path)) { throw "Language file not found: $path" }
-        if ([IO.Path]::GetExtension($path) -ine '.psd1') {
-            throw "Expected a .psd1 language file: $path"
+        else { [IO.Path]::GetFullPath((Join-Path $Folder $Language)) }
+        if ([IO.Path]::GetExtension($resolved) -ine '.psd1' -or -not [IO.File]::Exists($resolved)) {
+            throw "Language file not found or not PSD1: $resolved"
         }
-        return $path
+        return $resolved
     }
-
-    # Try the UI culture, its neutral parents, and finally mandatory English.
-    # Example: zh-Hans-CN -> zh-Hans -> zh -> en.
-    $culture = Get-UICulture
-    while ($culture -and -not [string]::IsNullOrEmpty($culture.Name)) {
-        $candidate = Join-Path $languages ($culture.Name + '.psd1')
+    if ($Language) {
+        try { $culture = [Globalization.CultureInfo]::GetCultureInfo($Language) }
+        catch { $culture = $null }
+    }
+    else { $culture = Get-UICulture }
+    while ($culture -and $culture.Name) {
+        $candidate = Join-Path $Folder ($culture.Name + '.psd1')
         if ([IO.File]::Exists($candidate)) { return [IO.Path]::GetFullPath($candidate) }
         $culture = $culture.Parent
     }
-
-    $fallback = Join-Path $languages 'en.psd1'
-    if ([IO.File]::Exists($fallback)) { return [IO.Path]::GetFullPath($fallback) }
-    throw "Fallback language file missing: $fallback"
+    $english = Join-Path $Folder 'en.psd1'
+    if (-not [IO.File]::Exists($english)) { throw "English language file missing: $english" }
+    return [IO.Path]::GetFullPath($english)
 }
 
-function Test-UtilityUacCancelled {
-    param([Parameter(Mandatory = $true)][Exception]$Exception)
+function Import-PSWinKitTranslations {
+    param([string]$Folder, [string]$SelectedFile, [switch]$RequireTitle)
+    $fallbackFile = Join-Path $Folder 'en.psd1'
+    if (-not [IO.File]::Exists($fallbackFile)) { throw "English language file missing: $fallbackFile" }
+    $fallback = Import-PowerShellDataFile -LiteralPath $fallbackFile -ErrorAction Stop
+    $selected = Import-PowerShellDataFile -LiteralPath $SelectedFile -ErrorAction Stop
+    if (-not ($fallback -is [hashtable]) -or -not ($selected -is [hashtable])) {
+        throw "Invalid translation table: $SelectedFile"
+    }
+    if ($RequireTitle -and (-not $fallback.ContainsKey('Title') -or
+        [string]::IsNullOrWhiteSpace([string]$fallback['Title']))) {
+        throw "Missing mandatory Title in English translations: $fallbackFile"
+    }
+    $messages = @{}
+    foreach ($key in $fallback.Keys) { $messages[$key] = $fallback[$key] }
+    foreach ($key in $selected.Keys) { $messages[$key] = $selected[$key] }
+    return $messages
+}
 
-    # UAC cancellation is Win32 ERROR_CANCELLED (1223 / 0x800704C7).
-    # Search the inner exception chain because Start-Process can wrap it.
-    $errorObject = $Exception
-    while ($null -ne $errorObject) {
-        if ($errorObject -is [ComponentModel.Win32Exception] -and
-            $errorObject.NativeErrorCode -eq 1223) { return $true }
-        if ($errorObject.HResult -eq -2147023673) { return $true }
-        $errorObject = $errorObject.InnerException
+function Get-PSWinKitText {
+    param([hashtable]$Messages, [string]$Key, [object[]]$Values = @())
+    if (-not $Messages.ContainsKey($Key)) { throw "Missing Common language key: $Key" }
+    $template = [string]$Messages[$Key]
+    if ($Values.Count -eq 0) { return $template }
+    return [string]::Format([Globalization.CultureInfo]::InvariantCulture, $template, [object[]]$Values)
+}
+
+function Format-PSWinKitDateTime {
+    param([datetime]$Value)
+    $culture = [Globalization.CultureInfo]::CurrentCulture
+    return ($Value.ToString('d', $culture) + ' ' + $Value.ToString('T', $culture))
+}
+
+function Format-PSWinKitDuration {
+    param([timespan]$Value, [hashtable]$Messages)
+    $separator = [Globalization.CultureInfo]::CurrentCulture.DateTimeFormat.TimeSeparator
+    $clock = '{0:00}{3}{1:00}{3}{2:00}' -f $Value.Hours, $Value.Minutes, $Value.Seconds, $separator
+    $days = [long][Math]::Floor($Value.TotalDays)
+    if ($days -gt 0) {
+        $number = $days.ToString('N0', [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ')
+        return ($number + (Get-PSWinKitText -Messages $Messages -Key 'DaySuffix') + ' ' + $clock)
+    }
+    return $clock
+}
+
+function Test-PSWinKitSimpleValue {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [string] -or $Value -is [bool] -or
+        $Value -is [Management.Automation.SwitchParameter] -or
+        $Value -is [byte] -or $Value -is [sbyte] -or
+        $Value -is [int16] -or $Value -is [uint16] -or
+        $Value -is [int32] -or $Value -is [uint32] -or
+        $Value -is [int64] -or $Value -is [uint64] -or
+        $Value -is [single] -or $Value -is [double] -or $Value -is [decimal]) { return $true }
+    if ($Value -is [array]) {
+        foreach ($item in $Value) {
+            if ($item -is [array] -or -not (Test-PSWinKitSimpleValue -Value $item)) { return $false }
+        }
+        return $true
     }
     return $false
 }
 
-function Get-UtilityMessage {
-    param(
-        [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][hashtable]$Messages,
-        [object[]]$Values = @()
-    )
-    $parts = $Key.Split('.')
-    if ($parts.Count -ne 2 -or
-        -not $Messages.ContainsKey($parts[0]) -or
-        -not ($Messages[$parts[0]] -is [hashtable]) -or
-        -not $Messages[$parts[0]].ContainsKey($parts[1])) {
-        throw "Missing language key: $Key"
+function Test-PSWinKitUacCancelled {
+    param([Exception]$Exception)
+    while ($null -ne $Exception) {
+        if ($Exception -is [ComponentModel.Win32Exception] -and
+            $Exception.NativeErrorCode -eq 1223) { return $true }
+        if ($Exception.HResult -eq -2147023673) { return $true }
+        $Exception = $Exception.InnerException
     }
-    $template = [string]$Messages[$parts[0]][$parts[1]]
-    if ($Values.Count -eq 0) { return $template }
-    return [string]::Format([Globalization.CultureInfo]::InvariantCulture,
-                            $template, [object[]]$Values)
+    return $false
 }
 
 function Start-Utility {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
-        [Parameter(Mandatory = $true)][string]$Section,
+        [switch]$RequireAdministrator,
         [string]$LanguageFile,
-        [switch]$PauseOnExit,
-        [switch]$RequireAdministrator
+        [switch]$PauseOnExit
     )
 
-    $scriptPathResolved = [IO.Path]::GetFullPath($ScriptPath)
-    if (-not [IO.File]::Exists($scriptPathResolved)) {
-        throw "Script not found: $scriptPathResolved"
+    # IMPORTANT: read the direct caller's PSBoundParameters at scope 1, not inside a helper.
+    $bound = Get-Variable -Name PSBoundParameters -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
+    $explicitParameters = @{}
+    if ($bound -is [Collections.IDictionary]) {
+        foreach ($name in $bound.Keys) { $explicitParameters[[string]$name] = $bound[$name] }
     }
 
-    $languagePath = Resolve-UtilityLanguageFile -Requested $LanguageFile
+    $scriptFile = [IO.Path]::GetFullPath($ScriptPath)
+    if (-not [IO.File]::Exists($scriptFile)) { throw "Script not found: $scriptFile" }
+    $utilityRoot = [IO.Path]::GetDirectoryName($scriptFile)
+    $utilityLanguages = Join-Path $utilityRoot 'Languages'
 
-    if ($RequireAdministrator -and -not (Test-UtilityAdministrator)) {
-        # Language path is carried across UAC; object serialization is unnecessary.
-        # The original process returns $null whether elevation was started or declined.
-        $messages = Import-PowerShellDataFile -LiteralPath $languagePath -ErrorAction Stop
-        Write-Host (Get-UtilityMessage -Key 'Host.RequestElevation' -Messages $messages) -ForegroundColor Yellow
+    # Internal values are set only by the elevated launch command, not script parameters.
+    $inheritedLanguage = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_LANGUAGE')
+    $inheritedElevation = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_ELEVATED')
+    [Environment]::SetEnvironmentVariable('PSWINKIT_INTERNAL_LANGUAGE', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('PSWINKIT_INTERNAL_ELEVATED', $null, 'Process')
+    if (-not $LanguageFile -and $inheritedLanguage) { $LanguageFile = $inheritedLanguage }
 
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $argumentLine = '-NoProfile -ExecutionPolicy Bypass -File "' +
-            $scriptPathResolved + '" -LanguageFile "' + $languagePath + '" -PauseOnExit'
+    $explicitLanguage = -not [string]::IsNullOrEmpty($LanguageFile)
+    $selectedFile = Find-PSWinKitLanguageFile -Folder $utilityLanguages -Language $LanguageFile -Explicit:$explicitLanguage
+    $selectedCulture = [IO.Path]::GetFileNameWithoutExtension($selectedFile)
+    $utilityMessages = Import-PSWinKitTranslations -Folder $utilityLanguages -SelectedFile $selectedFile -RequireTitle
+    if (-not $utilityMessages.ContainsKey('Title') -or -not [string]$utilityMessages['Title']) {
+        throw "Missing mandatory Title in utility translations: $selectedFile"
+    }
+    $commonLanguages = Join-Path $script:PSWinKitCommonRoot 'Languages'
+    $commonFile = Find-PSWinKitLanguageFile -Folder $commonLanguages -Language $selectedCulture
+    $commonMessages = Import-PSWinKitTranslations -Folder $commonLanguages -SelectedFile $commonFile
+
+    if ($RequireAdministrator -and -not (Test-PSWinKitAdministrator)) {
+        if ($inheritedElevation -eq '1') {
+            throw (Get-PSWinKitText -Messages $commonMessages -Key 'ElevationFailed')
+        }
+        foreach ($name in $explicitParameters.Keys) {
+            $value = $explicitParameters[$name]
+            if (-not (Test-PSWinKitSimpleValue -Value $value)) {
+                $type = if ($null -eq $value) { 'null' } else { $value.GetType().FullName }
+                throw "Unsupported UAC parameter -$name ($type). Only simple values and arrays are supported."
+            }
+            if ($value -is [Management.Automation.SwitchParameter]) {
+                $explicitParameters[$name] = [bool]$value
+            }
+        }
+        # Serialization is data-only; all inserted literals below are base64, never user code.
+        $xml = [Management.Automation.PSSerializer]::Serialize($explicitParameters)
+        $args64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($xml))
+        $path64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptFile))
+        $lang64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($selectedFile))
+        $code = @"
+`$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$args64'))
+`$raw = [Management.Automation.PSSerializer]::Deserialize(`$payload)
+if (-not (`$raw -is [Collections.IDictionary])) { throw 'Invalid PSWinKit UAC argument data.' }
+`$arguments = @{}
+foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
+`$env:PSWINKIT_INTERNAL_LANGUAGE = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$lang64'))
+`$env:PSWINKIT_INTERNAL_ELEVATED = '1'
+`$scriptFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$path64'))
+& `$scriptFile @arguments
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+        $argumentLine = '-NoProfile -EncodedCommand ' + $encodedCommand
+        if ($argumentLine.Length -ge 30000) {
+            throw 'Too many UAC arguments: the encoded command exceeds the safe Windows command-line length.'
+        }
+        $exe = Join-Path $PSHOME 'powershell.exe' # Retains x86/x64 bitness.
+        $workdir = $utilityRoot
+        try {
+            if ($PWD.Provider.Name -eq 'FileSystem' -and [IO.Directory]::Exists($PWD.ProviderPath)) {
+                $workdir = $PWD.ProviderPath
+            }
+        }
+        catch { }
+        Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'RequestElevation') -ForegroundColor Yellow
         try {
             Start-Process -FilePath $exe -ArgumentList $argumentLine -Verb RunAs `
-                -WorkingDirectory ([IO.Path]::GetDirectoryName($scriptPathResolved)) `
-                -ErrorAction Stop | Out-Null
+                -WorkingDirectory $workdir -ErrorAction Stop | Out-Null
         }
         catch {
-            if (Test-UtilityUacCancelled -Exception $_.Exception) { return $null }
+            if (Test-PSWinKitUacCancelled -Exception $_.Exception) { return $null }
             throw
         }
         return $null
     }
 
-    # Only the active process loads and uses the localization for its work.
-    $messages = Import-PowerShellDataFile -LiteralPath $languagePath -ErrorAction Stop
-    if (-not ($messages -is [hashtable])) {
-        throw "Invalid language data file: $languagePath"
+    # The actual worker owns both clocks. UAC waiting is not included in duration.
+    $startedAt = Get-Date
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $pause = [bool]([Environment]::UserInteractive -and
+        ($PauseOnExit -or ($inheritedElevation -eq '1') -or (Test-PSWinKitStandalone)))
+    $utility = [pscustomobject]@{
+        StartedAt      = $startedAt
+        Stopwatch      = $watch
+        Language       = $selectedCulture
+        LanguageFile   = $selectedFile
+        Messages       = $utilityMessages
+        CommonMessages = $commonMessages
+        PauseOnExit     = $pause
     }
-
-    $title = Get-UtilityMessage -Key ($Section + '.Title') -Messages $messages
-    Write-Host ('=== {0} ===' -f $title) -ForegroundColor Cyan
-
-    return [pscustomobject]@{
-        LanguageFile = $languagePath
-        Messages     = $messages
-        PauseOnExit  = [bool]($PauseOnExit -or (Test-UtilityStandaloneLaunch))
-    }
+    Write-Host ('=== {0} ===' -f [string]$utilityMessages['Title']) -ForegroundColor Cyan
+    Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'Started' -Values @((Format-PSWinKitDateTime $startedAt))) -ForegroundColor Gray
+    Write-Host ''
+    return $utility
 }
 
 function Stop-Utility {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Context)
+    param([Parameter(Mandatory = $true)][object]$Utility)
 
-    if (-not $Context.PauseOnExit) { return }
-    try {
-        $messages = $Context.Messages
-        Write-Host "`n$(Get-UtilityMessage -Key 'Host.PressAnyKey' -Messages $messages)" -ForegroundColor DarkGray
-        try { [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') }
-        catch { [void](Read-Host (Get-UtilityMessage -Key 'Host.PressEnter' -Messages $messages)) }
+    $finishedAt = Get-Date
+    $Utility.Stopwatch.Stop()
+    $elapsed = $Utility.Stopwatch.Elapsed
+    $commonMessages = $Utility.CommonMessages
+    Write-Host ''
+    Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'Finished' `
+        -Values @((Format-PSWinKitDateTime $finishedAt))) -ForegroundColor Gray
+    Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'Duration' `
+        -Values @((Format-PSWinKitDuration -Value $elapsed -Messages $commonMessages))) -ForegroundColor Gray
+
+    if ($Utility.PauseOnExit) {
+        try {
+            Write-Host "`n$(Get-PSWinKitText -Messages $commonMessages -Key 'PressAnyKey')" -ForegroundColor DarkGray
+            try { [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') }
+            catch { [void](Read-Host (Get-PSWinKitText -Messages $commonMessages -Key 'PressEnter')) }
+        }
+        catch { }
     }
-    catch { }
 }

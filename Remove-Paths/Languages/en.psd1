@@ -1,23 +1,12 @@
-﻿# Shared messages for Windows PowerShell 5.1 utilities.
-# UTF-8 with BOM. Positional placeholders: {0}, {1}, ...
-# Each utility owns its own section; Common and Host are shared.
+﻿# Remove-Paths messages. UTF-8 BOM for Windows PowerShell 5.1.
+# Missing translations fall back to Languages/en.psd1.
 @{
-    Common = @{
         YesNo        = '(Y/N)'
         SummaryTitle = '--- Final summary ---'
         InvalidYesNo = 'Enter Y or N. There is no default.'
         Completed    = 'Completed'
-    }
+    DaySuffix = 'd'
 
-    Host = @{
-        RequestElevation = 'Requesting administrator privileges...'
-        ElevationFailed  = 'Administrator privileges were not obtained after relaunch.'
-        StartFailed      = 'Startup error: {0}'
-        PressAnyKey      = 'Press any key to close this window...'
-        PressEnter       = 'Press Enter'
-    }
-
-    RemovePaths = @{
         Title               = 'Remove files and directories'
         PhaseStart          = 'Starting'
         PhaseEntry          = 'Entering paths'
@@ -50,8 +39,6 @@
         PreviewCounts       = 'To delete: {0}; skipped: {1}'
         Confirm             = 'Delete the listed items permanently'
         Removing            = 'Deleting'
-        StartTime           = 'Started: {0}'
-        EndTime             = 'Finished: {0}, duration: {1}'
         AuthzUnavailable     = 'Authz permission checks are unavailable; using ordinary deletion attempts.'
         DeleteFailure       = 'Could not delete [{0}]: {1}'
         DeleteCounters      = 'Files: {0}, folders: {1}, errors: {2}'
@@ -80,6 +67,4 @@
         ItemInterrupted     = 'Interrupted'
         ItemNotStarted      = 'Not started'
         SummaryTruncated    = 'Only the first 15 errors are shown.'
-    }
-
 }

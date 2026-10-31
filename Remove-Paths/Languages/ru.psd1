@@ -1,23 +1,12 @@
-﻿# Shared messages for Windows PowerShell 5.1 utilities.
-# UTF-8 with BOM. Positional placeholders: {0}, {1}, ...
-# Each utility owns its own section; Common and Host are shared.
+﻿# Remove-Paths messages. UTF-8 BOM for Windows PowerShell 5.1.
+# Missing translations fall back to Languages/en.psd1.
 @{
-    Common = @{
         YesNo        = '(Y/N)'
         SummaryTitle = '--- Итог ---'
         InvalidYesNo = 'Нужно ввести Y или N. Выбора по умолчанию нет.'
         Completed    = 'Выполнено'
-    }
+    DaySuffix = 'д'
 
-    Host = @{
-        RequestElevation = 'Запрашиваю права администратора...'
-        ElevationFailed  = 'Не удалось получить права администратора после перезапуска.'
-        StartFailed      = 'Ошибка запуска: {0}'
-        PressAnyKey      = 'Нажмите любую клавишу для закрытия окна...'
-        PressEnter       = 'Нажмите Enter'
-    }
-
-    RemovePaths = @{
         Title               = 'Удаление файлов и каталогов'
         PhaseStart          = 'Начало работы'
         PhaseEntry          = 'Ввод путей'
@@ -50,8 +39,6 @@
         PreviewCounts       = 'К удалению: {0}; пропущено: {1}'
         Confirm             = 'Удалить перечисленное без корзины?'
         Removing            = 'Удаление'
-        StartTime           = 'Начало: {0}'
-        EndTime             = 'Окончание: {0}, длительность: {1}'
         AuthzUnavailable     = 'Проверка прав через Authz недоступна; используется обычный режим удаления.'
         DeleteFailure       = 'Не удалось удалить [{0}]: {1}'
         DeleteCounters      = 'Файлов: {0}, папок: {1}, ошибок: {2}'
@@ -80,6 +67,4 @@
         ItemInterrupted     = 'Прервано'
         ItemNotStarted      = 'Не начато'
         SummaryTruncated    = 'Показаны только первые 15 ошибок.'
-    }
-
 }

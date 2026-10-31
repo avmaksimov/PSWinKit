@@ -1,0 +1,6 @@
+# Temporary local outputs; do not ignore project source files.
+*.log
+*.tmp
+*.bak
+Thumbs.db
+Desktop.ini
