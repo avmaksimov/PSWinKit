@@ -1,5 +1,7 @@
 # PSWinKit
 
+**English** | [Русский](README.ru.md)
+
 **PSWinKit** is a growing collection of independent Windows PowerShell utilities. Every utility runs without required command-line parameters and shares a small library for localization, UAC elevation, startup and shutdown.
 
 ## Utilities

@@ -1,8 +1,10 @@
 # PSWinKit — контракт разработки PowerShell-утилит
 
+[English](README.md) | **Русский**
+
 **Версия 1.1 (Start-Utility / Stop-Utility, региональное форматирование)**
 **Статус: согласованный архитектурный контракт.**
-Этот файл — одновременно документация `Common/Common.ps1` и обязательный контракт для `Remove-Paths`, будущих `WinRepair`, `WinRE-Manager` и других утилит PSWinKit. Английский эквивалент: [README.md](README.md).
+Этот файл — одновременно документация `Common/Common.ps1` и обязательный контракт для `Remove-Paths`, будущих `WinRepair`, `WinRE-Manager` и других утилит PSWinKit.
 
 ## 1. Назначение и принципы
 

@@ -1,5 +1,7 @@
 # Remove-Paths — permanent file and directory deletion
 
+**English** | [Русский](README.ru.md)
+
 An interactive tool for deleting selected files and directories, including objects with restrictive NTFS permissions, read-only attributes and long paths.
 
 **Warning: deletes directly, bypassing the Recycle Bin. Windows provides no built-in undo.** Review all paths before confirming.
