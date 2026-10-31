@@ -318,15 +318,21 @@ $script:CounterStartErrors = 0
 $script:CounterWatch = [Diagnostics.Stopwatch]::StartNew()
 $script:CounterStage = ''
 $script:CounterStageKey = ''
+$script:CounterStagePath = ''
 $script:CounterLastShownStage = ''
 $script:CounterStagesSeen = New-Object 'System.Collections.Generic.HashSet[string]'
 
 # Update the current stage before operations which can take a long time.
 function Set-DeletionStage {
-    param([string]$Key)
-    if (-not $script:CounterActive -or $script:CounterStageKey -eq $Key) { return }
+    param([string]$Key, [string]$Path = '')
+    if (-not $script:CounterActive -or
+        ($script:CounterStageKey -eq $Key -and $script:CounterStagePath -eq $Path)) { return }
     $script:CounterStageKey = $Key
+    $script:CounterStagePath = $Path
     $script:CounterStage = T $Key
+    if ($Path -and $Key -in @('StageEnumerating', 'StageOwnership', 'StagePermissions')) {
+        $script:CounterStage += ': ' + $Path
+    }
     $firstTime = $script:CounterStagesSeen.Add($Key)
     if ($firstTime -or
         ($script:CounterStage -ne $script:CounterLastShownStage -and
@@ -349,6 +355,11 @@ function Update-DeletionCounters {
         $line = '      ' + $script:CounterStage
     }
     $script:CounterLastShownStage = $script:CounterStage
+    # Keep the changing line within the console width so a long path cannot wrap it.
+    try { $width = [Console]::WindowWidth - 1 } catch { $width = 0 }
+    if ($width -ge 35 -and $line.Length -gt $width) {
+        $line = $line.Substring(0, $width - 3) + '...'
+    }
     $script:CounterLineLength = [Math]::Max($script:CounterLineLength, $line.Length)
     Write-Host ("`r" + $line.PadRight($script:CounterLineLength)) -NoNewline
     $script:CounterWatch.Restart()
@@ -411,13 +422,13 @@ function Repair-Access {
 
         # First grant ACL. Only if that fails, take ownership and retry ACL.
         $granted = $false
-        Set-DeletionStage -Key 'StagePermissions'
+        Set-DeletionStage -Key 'StagePermissions' -Path $Path
         try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
         catch { }
         if (-not $granted) {
-            Set-DeletionStage -Key 'StageOwnership'
+            Set-DeletionStage -Key 'StageOwnership' -Path $Path
             try { & takeown.exe /F $Path /A 2>&1 | Out-Null } catch { }
-            Set-DeletionStage -Key 'StagePermissions'
+            Set-DeletionStage -Key 'StagePermissions' -Path $Path
             try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
             catch { }
         }
@@ -461,6 +472,7 @@ function Add-Failure {
         $script:CounterLineLength = 0
         $script:CounterStage = ''
         $script:CounterStageKey = 'StageDeleting'
+        $script:CounterStagePath = ''
         Update-DeletionCounters -Force
     }
     else {
@@ -485,7 +497,7 @@ function Remove-SafeEntry {
         if (-not (Test-DirectoryDeleteAccess -Path $Path)) {
             [void](Repair-Access -Path $Path -Directory $true)
         }
-        Set-DeletionStage -Key 'StageEnumerating'
+        Set-DeletionStage -Key 'StageEnumerating' -Path $Path
         try {
             $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
         }
@@ -668,6 +680,7 @@ function Invoke-Main {
         $script:CounterActive = $true
         $script:CounterStage = ''
         $script:CounterStageKey = ''
+        $script:CounterStagePath = ''
         $script:CounterLastShownStage = ''
         $script:CounterStagesSeen.Clear()
         $script:CounterWatch.Restart()
