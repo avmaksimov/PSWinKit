@@ -86,4 +86,4 @@ README.ru.md
 
 Common library and [development contract](../Common/README.md) are in `../Common/`. License: [MIT](../LICENSE).
 
-> **Localization:** Repair workflow messages remain in Russian pending a separate localization pass. Shared startup and shutdown messages follow the selected UI language.
+> **Localization:** utility messages are stored in `Languages/en.psd1` and `Languages/ru.psd1`; Common messages are separate. Output from DISM, SFC and CHKDSK follows the Windows system language.

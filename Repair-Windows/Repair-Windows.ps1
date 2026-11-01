@@ -13,11 +13,12 @@ WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
 $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
 if ($null -eq $utility) { return }
+$script:RepairMessages = $utility.Messages
 
 
 $script:DiskResult = $null
 $script:SfcResult = $null
-$script:VolumeStatus = 'Не проверялся'
+$script:VolumeStatus = $script:RepairMessages.NotChecked_59
 $script:VolumeNeedsAttention = $false
 $script:VolumeScheduled = $false
 $script:RestartRequested = $false
@@ -47,7 +48,7 @@ function Ask-YesNo {
         if ($answer.Length -eq 0) { return $DefaultYes }
         if (@('Д', 'ДА', 'Y', 'YES') -contains $answer) { return $true }
         if (@('Н', 'НЕТ', 'N', 'NO') -contains $answer) { return $false }
-        Write-Host 'Введите Y или N.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.EnterYOrN_89 -ForegroundColor Yellow
     }
 }
 
@@ -99,8 +100,8 @@ function Find-ImagesOnDrives {
         try { $file = Find-ImageAtPath $root } catch { }
         if (($file -ne $null) -and (-not ($found -contains $file))) { $found += $file }
     }
-    Write-Host ('Проверены диски: ' + $(if ($checked.Count -gt 0) { $checked -join ', ' } else { 'не удалось получить список' }))
-    Write-Host 'Проверялись только sources\install.wim, sources\install.esd (и файлы в корне), без поиска по всем папкам.'
+    Write-Host ($script:RepairMessages.CheckedDrives_141A + $(if ($checked.Count -gt 0) { $checked -join ', ' } else { $script:RepairMessages.UnableToListDrives_141B }))
+    Write-Host $script:RepairMessages.OnlySourcesInstallWim_142
     return $found
 }
 
@@ -110,44 +111,44 @@ function Choose-Image {
     # For other scenarios, retain the existing automatic image discovery.
     if (-not $AskForDrive) {
         Write-Host ''
-        Write-Host 'Поиск установочного образа на доступных дисках...' -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.SearchingAvailableDrivesFor_152 -ForegroundColor Cyan
         $found = @(Find-ImagesOnDrives)
         if ($found.Count -eq 1) {
-            Write-Host ('Найден один образ: ' + $found[0]) -ForegroundColor Green
-            Write-Host 'Используется найденный образ. Если он не подходит, можно выбрать другой при следующей попытке.'
+            Write-Host ($script:RepairMessages.FoundOneImage_155 + $found[0]) -ForegroundColor Green
+            Write-Host $script:RepairMessages.UsingTheDetectedImage_156
             return [string]$found[0]
         }
         if ($found.Count -gt 1) {
-            Write-Host 'Найдено несколько образов:' -ForegroundColor Cyan
+            Write-Host $script:RepairMessages.MultipleImagesFound_160 -ForegroundColor Cyan
             for ($i = 0; $i -lt $found.Count; $i++) {
                 Write-Host (' {0}. {1}' -f ($i + 1), $found[$i])
             }
             while ($true) {
-                $answer = (Read-Host 'Номер образа (Enter — указать другую букву)').Trim()
+                $answer = (Read-Host $script:RepairMessages.ImageNumberEnterSpecify_165).Trim()
                 if ($answer -eq '') { break }
                 $selected = 0
                 if ([int]::TryParse($answer, [ref]$selected) -and $selected -gt 0 -and $selected -le $found.Count) {
                     return [string]$found[$selected - 1]
                 }
-                Write-Host 'Неверный номер.' -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.InvalidNumber_171 -ForegroundColor Yellow
             }
         } else {
-            Write-Host 'Смонтированный установочный образ автоматически не найден.' -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.NoMountedWindowsInstallation_174 -ForegroundColor Yellow
         }
     }
     Write-Host ''
-    Write-Host 'Смонтируйте установочный ISO Windows и введите букву его диска без двоеточия (например, E).' -ForegroundColor Cyan
-    Write-Host 'При необходимости допускается полный путь к install.wim / install.esd.'
-    Write-Host 'Enter — пропустить восстановление из ISO и перейти к SFC.'
+    Write-Host $script:RepairMessages.MountAWindowsInstallation_178 -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.YouMayAlsoEnter_179
+    Write-Host $script:RepairMessages.EnterSkipISOBased_180
     while ($true) {
-        $raw = (Read-Host 'Буква диска').Trim()
+        $raw = (Read-Host $script:RepairMessages.DriveLetter_182).Trim()
         if ($raw.Length -eq 0) { return $null }
         try { $file = Find-ImageAtPath $raw } catch { $file = $null }
         if ($file -ne $null) {
-            Write-Host ('Найден образ: ' + $file) -ForegroundColor Green
+            Write-Host ($script:RepairMessages.FoundImage_186 + $file) -ForegroundColor Green
             return $file
         }
-        Write-Host 'Не найден sources\install.wim или sources\install.esd. Проверьте букву диска.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotFindSources_189 -ForegroundColor Yellow
     }
 }
 
@@ -189,7 +190,7 @@ function Get-ImageDetails {
     # the "Details for image" section, never the executable banner.
     $detailsHeading = [regex]::Match($output, '(?im)^\s*Details\s+for\s+image\s*:\s*[^\r\n]*')
     if (-not $detailsHeading.Success) {
-        Write-Host 'Не удалось найти раздел метаданных образа в выводе DISM.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotFindThe_231 -ForegroundColor Yellow
         return $null
     }
     $body = $output.Substring($detailsHeading.Index + $detailsHeading.Length)
@@ -226,13 +227,13 @@ function Get-ImageDetails {
 function Choose-ImageIndex {
     param([string]$ImagePath, [string]$OsCaption, $OsProfile, [bool]$IsServer)
     Write-Host ''
-    Write-Host ('Редакции внутри: ' + $ImagePath) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.EditionsIn_268 + $ImagePath) -ForegroundColor Cyan
 
     $rawLines = @(& $script:DismExe /English /Get-WimInfo ("/WimFile:{0}" -f $ImagePath) 2>&1)
     $code = [int]$LASTEXITCODE
     if ($code -ne 0) {
         foreach ($line in $rawLines) { Write-Host ([string]$line) }
-        Write-Host ('Не удалось прочитать редакции: ' + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotReadImage_274 + (Format-ExitCode $code)) -ForegroundColor Red
         return $null
     }
     $images = @()
@@ -247,7 +248,7 @@ function Choose-ImageIndex {
         }
     }
     if ($images.Count -eq 0) {
-        Write-Host 'Не удалось прочитать список индексов DISM. Выбор отменён.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotReadThe_289 -ForegroundColor Yellow
         foreach ($line in $rawLines) { Write-Host ([string]$line) }
         return $null
     }
@@ -259,14 +260,14 @@ function Choose-ImageIndex {
 
     Write-Host ''
     foreach ($image in $images) {
-        $mark = if ([int]$image.Index -eq $suggested) { '  <-- название совпадает' } else { '' }
+        $mark = if ([int]$image.Index -eq $suggested) { $script:RepairMessages.NameMatches_301 } else { '' }
         Write-Host (' {0,2} — {1}{2}' -f $image.Index, $image.Name, $mark)
     }
-    Write-Host ('Установленная ОС: {0}; EditionID: {1}' -f $OsCaption, $OsProfile.Edition)
+    Write-Host ($script:RepairMessages.InstalledOS0EditionID_304 -f $OsCaption, $OsProfile.Edition)
 
     # Verify real WIM/ESD metadata (not only friendly name). Skip questions only if
     # Edition, Architecture, InstallationType and default language all match uniquely.
-    Write-Host 'Проверка редакции, версии Windows, архитектуры, типа установки и языка...' -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.CheckingEditionWindowsVersion_308 -ForegroundColor Cyan
     $verified = @()
     $candidate = @()
     foreach ($image in $images) {
@@ -286,7 +287,7 @@ function Choose-ImageIndex {
         }
     }
     if ($verified.Count -eq 1) {
-        Write-Host ('Индекс {0} выбран автоматически: все проверенные параметры совпали.' -f $verified[0]) -ForegroundColor Green
+        Write-Host ($script:RepairMessages.Index0SelectedAutomatically_328 -f $verified[0]) -ForegroundColor Green
         return [int]$verified[0]
     }
     # If language information is absent or different, do not assume 100% compatibility.
@@ -296,16 +297,16 @@ function Choose-ImageIndex {
     if ($candidate.Count -ne 1) { $suggested = 0 }
 
     if ($suggested -gt 0) {
-        Write-Host ('Предложен индекс {0}; Enter — выбрать его.' -f $suggested) -ForegroundColor Cyan
-        Write-Host 'Автовыбор пропущен: не все параметры образа удалось однозначно подтвердить.' -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.SuggestedIndex0Press_338 -f $suggested) -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.AutomaticSelectionSkippedNot_339 -ForegroundColor Yellow
     } else {
-        Write-Host 'Однозначного совпадения нет. Выберите индекс вручную.' -ForegroundColor Yellow
-        if ($IsServer) { Write-Host 'На сервере особенно важно различать Server Core и Desktop Experience.' -ForegroundColor Yellow }
+        Write-Host $script:RepairMessages.NoUnambiguousMatchSelect_341 -ForegroundColor Yellow
+        if ($IsServer) { Write-Host $script:RepairMessages.OnServersDistinguishCarefully_342 -ForegroundColor Yellow }
     }
-    Write-Host 'Источник должен соответствовать установленной ОС; индекс не гарантирует наличие всех файлов для ремонта.' -ForegroundColor Yellow
+    Write-Host $script:RepairMessages.TheSourceMustMatch_344 -ForegroundColor Yellow
 
     while ($true) {
-        $question = if ($suggested -gt 0) { 'Индекс образа (Enter — предложенный)' } else { 'Индекс образа (Enter — отмена)' }
+        $question = if ($suggested -gt 0) { $script:RepairMessages.ImageIndexEnterSuggested_347A } else { $script:RepairMessages.ImageIndexEnterCancel_347B }
         $raw = (Read-Host $question).Trim()
         if ($raw.Length -eq 0) {
             if ($suggested -gt 0) { return $suggested }
@@ -317,7 +318,7 @@ function Choose-ImageIndex {
                 if ([int]$image.Index -eq $index) { return $index }
             }
         }
-        Write-Host 'Такого индекса в списке нет. Попробуйте ещё раз.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheIndexIsNot_359 -ForegroundColor Yellow
     }
 }
 
@@ -332,7 +333,7 @@ function Invoke-RepairExecutable {
         $process.StartInfo.Arguments = $Arguments
         $process.StartInfo.UseShellExecute = $false
         $process.StartInfo.CreateNoWindow = $false
-        if (-not $process.Start()) { throw ('Не удалось запустить ' + $Executable) }
+        if (-not $process.Start()) { throw ($script:RepairMessages.FailedToStart_374 + $Executable) }
         while (-not $process.WaitForExit(400)) { }
         $process.Refresh()
         return [int]$process.ExitCode
@@ -358,10 +359,10 @@ function Run-Dism {
         $argList += ('/Source:{0}:"{1}":{2}' -f $kind, $ImagePath, $ImageIndex)
         # Always permit the Windows Update fallback: do not add /LimitAccess.
         # Actual Microsoft Update access still depends on local policies/network.
-        Write-Host ("`nDISM с источником: {0}; индекс {1}" -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
-        Write-Host 'Резервный источник Windows Update разрешён (/LimitAccess не используется; доступ зависит от политик).'
+        Write-Host ($script:RepairMessages.NDISMUsingSource0_400 -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.WindowsUpdateFallbackIs_401
     } else {
-        Write-Host "`nDISM со стандартным источником восстановления." -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.NDISMUsingTheDefault_403 -ForegroundColor Cyan
     }
 
     # Do not catch cancellation and turn it into an ordinary DISM error.
@@ -371,15 +372,15 @@ function Run-Dism {
     $color = if (($code -eq 0) -or ($code -eq 3010)) { 'Green' } else { 'Red' }
     Write-Host ('DISM: ' + (Format-ExitCode $code)) -ForegroundColor $color
     if ($code -eq -2146498283) {
-        Write-Host 'Ошибка 0x800F0915: изучите ошибки CBS.log; совпадение редакции ISO не гарантирует наличия нужных компонентов.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.Error0x800F0915InspectCBS_413 -ForegroundColor Yellow
     }
     if (($code -ne 0) -and ($code -ne 3010) -and (-not [string]::IsNullOrEmpty($ImagePath))) {
-        Write-Host 'Восстановление с ISO не удалось. Это не ошибка выбора индекса сама по себе:' -ForegroundColor Yellow
-        Write-Host 'часть требуемых версий файлов может отсутствовать в образе; проверьте CBS.log.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RepairUsingTheISO_416 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.SomeRequiredFileVersions_417 -ForegroundColor Yellow
         if ($code -eq -2146498283) {
-            Write-Host 'Источник восстановления не предоставил необходимые компоненты. Подробности в CBS.log и DISM.log.' -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.TheRepairSourceDid_419 -ForegroundColor Yellow
         } else {
-            Write-Host 'Причину ошибки восстановления смотрите в CBS.log и DISM.log.' -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.CheckCBSLogAnd_421 -ForegroundColor Yellow
         }
     }
     return $code
@@ -389,8 +390,8 @@ function Run-Dism {
 # Schedule an offline repair only with the user's explicit approval.
 function Schedule-SystemVolumeCheck {
     param([string]$Drive)
-    if (-not (Ask-YesNo ('Запланировать исправление {0} при следующей загрузке?' -f $Drive) $true)) {
-        Write-Host 'Проверка при загрузке не запланирована.' -ForegroundColor Yellow
+    if (-not (Ask-YesNo ($script:RepairMessages.ScheduleARepairOf_431 -f $Drive) $true)) {
+        Write-Host $script:RepairMessages.StartupTimeCheckingWas_432 -ForegroundColor Yellow
         return
     }
     $code = Invoke-RepairExecutable -Executable $script:ChkntfsExe -Arguments ('/c ' + $Drive)
@@ -398,9 +399,9 @@ function Schedule-SystemVolumeCheck {
         $script:VolumeScheduled = $true
         $script:VolumeNeedsAttention = $true
         $script:VolumeStatus = 'ScheduledAtBoot'
-        Write-Host 'Исправление запланировано при следующей загрузке.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RepairScheduledForThe_440 -ForegroundColor Yellow
     } else {
-        Write-Host ('Ошибка chkntfs: ' + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.ChkntfsError_442 + (Format-ExitCode $code)) -ForegroundColor Red
     }
 }
 
@@ -413,7 +414,7 @@ function Invoke-RepairVolume {
         [ValidateSet('Scan', 'SpotFix', 'OfflineScanAndFix')][string]$Mode
     )
     $name = [string]$DriveLetter
-    if ($name -notmatch '^[A-Za-z]$') { throw 'Некорректная буква тома.' }
+    if ($name -notmatch '^[A-Za-z]$') { throw $script:RepairMessages.InvalidVolumeDriveLetter_455 }
     $command = ('Repair-Volume -DriveLetter {0} -{1} -ErrorAction Stop' -f $name, $Mode)
     if ($Mode -ne 'Scan') { $command += ' -Confirm:$false' }
     & ([scriptblock]::Create($command))
@@ -425,77 +426,77 @@ function Test-SystemVolume {
     if ($drive -notmatch '^[A-Za-z]:$') {
         $script:VolumeStatus = 'UnknownSystemDrive'
         $script:VolumeNeedsAttention = $true
-        Write-Host ('Не удалось определить системный том: ' + $drive) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotDetermineThe_467 + $drive) -ForegroundColor Red
         return
     }
     $letter = [char]$drive.Substring(0, 1)
-    Write-Host ("`nПроверка файловой системы {0}..." -f $drive) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.NCheckingFileSystemOn_471 -f $drive) -ForegroundColor Cyan
     if ($OsVersion -ge [version]'6.2') {
         $cmdlet = Get-Command Repair-Volume -ErrorAction SilentlyContinue
         if ($null -ne $cmdlet) {
             try {
                 $scan = @(Invoke-RepairVolume -DriveLetter $letter -Mode Scan)
-                if ($scan.Count -ne 1) { throw 'Repair-Volume вернул пустой или неоднозначный результат.' }
+                if ($scan.Count -ne 1) { throw $script:RepairMessages.RepairVolumeReturnedAn_477 }
                 $status = ([string]$scan[0]).Trim()
                 $script:VolumeStatus = $status
                 Write-Host ('Repair-Volume -Scan: ' + $status)
                 if ($status -eq 'NoErrorsFound') {
-                    Write-Host 'Файловая система исправна.' -ForegroundColor Green
+                    Write-Host $script:RepairMessages.TheFileSystemIs_482 -ForegroundColor Green
                     return
                 }
                 if (@('SpotFixNeeded', 'OfflineScanAndFixNeeded', 'ScanNeeded') -contains $status) {
                     $script:VolumeNeedsAttention = $true
-                    Write-Host ('Тому требуется исправление или дополнительная проверка: ' + $status) -ForegroundColor Yellow
+                    Write-Host ($script:RepairMessages.TheVolumeNeedsRepair_487 + $status) -ForegroundColor Yellow
                     $spot = ($status -eq 'SpotFixNeeded')
                     $mode = if ($spot) { 'SpotFix' } else { 'OfflineScanAndFix' }
-                    if (Ask-YesNo ('Попробовать Repair-Volume -{0} для {1}?' -f $mode, $drive) $true) {
+                    if (Ask-YesNo ($script:RepairMessages.TryRepairVolume0_490 -f $mode, $drive) $true) {
                         try {
                             if ($spot) {
                                 $fix = @(Invoke-RepairVolume -DriveLetter $letter -Mode SpotFix)
                             } else {
                                 $fix = @(Invoke-RepairVolume -DriveLetter $letter -Mode OfflineScanAndFix)
                             }
-                            Write-Host ('Результат исправления: ' + ($fix -join ', '))
+                            Write-Host ($script:RepairMessages.RepairResult_497 + ($fix -join ', '))
                             $verify = @(Invoke-RepairVolume -DriveLetter $letter -Mode Scan)
                             if (($verify.Count -eq 1) -and (([string]$verify[0]).Trim() -eq 'NoErrorsFound')) {
                                 $script:VolumeNeedsAttention = $false
                                 $script:VolumeStatus = 'Repaired'
-                                Write-Host 'Повторная проверка: ошибок нет.' -ForegroundColor Green
+                                Write-Host $script:RepairMessages.VerificationNoErrorsFound_502 -ForegroundColor Green
                                 return
                             }
-                            Write-Host ('После исправления ещё требуется проверка: ' + ($verify -join ', ')) -ForegroundColor Yellow
+                            Write-Host ($script:RepairMessages.FurtherCheckingIsStill_505 + ($verify -join ', ')) -ForegroundColor Yellow
                         } catch [System.Management.Automation.PipelineStoppedException] {
                             throw
                         } catch {
-                            Write-Host ('Онлайн-исправление не завершено: ' + $_.Exception.Message) -ForegroundColor Yellow
+                            Write-Host ($script:RepairMessages.OnlineRepairDidNot_509 + $_.Exception.Message) -ForegroundColor Yellow
                         }
                     }
                     Schedule-SystemVolumeCheck -Drive $drive
                     return
                 }
-                Write-Host 'Неизвестный статус Repair-Volume; перехожу к CHKDSK.' -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.UnknownRepairVolumeStatus_515 -ForegroundColor Yellow
             } catch [System.Management.Automation.PipelineStoppedException] {
                 throw
             } catch {
-                Write-Host ('Не удалось проверить том через Repair-Volume: ' + $_.Exception.Message) -ForegroundColor Yellow
-                Write-Host 'Перехожу к CHKDSK без исправления.' -ForegroundColor Yellow
+                Write-Host ($script:RepairMessages.CouldNotCheckThe_519 + $_.Exception.Message) -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.SwitchingToReadOnly_520 -ForegroundColor Yellow
             }
         } else {
-            Write-Host 'Repair-Volume недоступен, использую CHKDSK.' -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.RepairVolumeIsUnavailable_523 -ForegroundColor Yellow
         }
     } else {
-        Write-Host 'Windows 7 / Server 2008 R2: CHKDSK без исправления.' -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.Windows7Server2008_526 -ForegroundColor Cyan
     }
     # Read-only fallback: neither /f nor /r is used automatically.
     $code = Invoke-RepairExecutable -Executable $script:ChkdskExe -Arguments $drive
     $script:VolumeStatus = ('CHKDSK ' + (Format-ExitCode $code))
     if ($code -eq 0) {
-        Write-Host 'CHKDSK: ошибок не обнаружено.' -ForegroundColor Green
+        Write-Host $script:RepairMessages.CHKDSKNoErrorsFound_532 -ForegroundColor Green
         return
     }
     $script:VolumeNeedsAttention = $true
     Write-Host ('CHKDSK: ' + (Format-ExitCode $code)) -ForegroundColor Yellow
-    Write-Host 'Возможны ошибки файловой системы или невозможность проверки. Изучите вывод.'
+    Write-Host $script:RepairMessages.TheFileSystemMay_537
     Schedule-SystemVolumeCheck -Drive $drive
 }
 
@@ -507,67 +508,67 @@ function Offer-InPlaceWindowsSetup {
     param([string]$OsCaption, $OsProfile, [bool]$IsServer, [version]$OsVersion)
 
     if ($IsServer -or ($OsVersion -lt [version]'10.0')) {
-        Write-Host 'Автоматический запуск Setup предлагается только для Windows 10/11; для других ОС используйте установщик вручную.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.AutomaticSetupLaunchIs_549 -ForegroundColor Yellow
         return
     }
     $image = [string]$script:SelectedRepairImage
     if ([string]::IsNullOrEmpty($image)) {
-        Write-Host 'Установочный ISO не был выбран. Смонтируйте совместимый ISO и запустите setup.exe вручную.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.NoInstallationISOWas_554 -ForegroundColor Yellow
         return
     }
     # Require an image in the standard sources folder and setup.exe on the
     # very same media; a random .wim/.esd cannot safely identify its installer.
     $match = [regex]::Match($image, '(?i)^([A-Z]:)\\sources\\install\.(?:wim|esd)$')
     if (-not $match.Success) {
-        Write-Host 'Источник WIM/ESD не находится в стандартной папке sources на установочном носителе.' -ForegroundColor Yellow
-        Write-Host 'Запустите setup.exe вручную с подходящего ISO Windows.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheWIMESDSource_561 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RunSetupExeManually_562 -ForegroundColor Yellow
         return
     }
     $setup = Join-Path ($match.Groups[1].Value + '\') 'setup.exe'
     if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
-        Write-Host ('На носителе не найден установщик: ' + $setup) -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.InstallerNotFoundOn_567 + $setup) -ForegroundColor Yellow
         return
     }
     $index = [int]$script:SelectedRepairIndex
     if ($index -le 0) {
-        Write-Host 'Индекс образа не выбран. Запуск Setup отменён.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.NoImageIndexWas_572 -ForegroundColor Yellow
         return
     }
     # Re-read metadata for exactly the index being passed to setup.exe.
     # Do not rely on the earlier DISM choice if media content has changed.
     $details = Get-ImageDetails -ImagePath $image -ImageIndex $index
     if ($null -eq $details) {
-        Write-Host 'Не удалось подтвердить метаданные установочного образа; запускайте Setup вручную.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotVerifyInstallation_579 -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Edition -eq '') -or ($details.Edition -ieq '') -or
         ($details.Edition -ine $OsProfile.Edition)) {
-        Write-Host ('Редакция ISO не подтверждена: установлена {0}, выбран индекс {1} ({2}).' -f $OsProfile.Edition, $script:SelectedRepairIndex, $details.Edition) -ForegroundColor Yellow
-        Write-Host 'Автоматический запуск Setup отменён: сначала проверьте редакцию образа.' -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.ISOEditionNotVerified_584 -f $OsProfile.Edition, $script:SelectedRepairIndex, $details.Edition) -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.AutomaticSetupLaunchCanceled_585 -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Architecture -eq '') -or ($details.Architecture -eq '') -or
         ($details.Architecture -ine $OsProfile.Architecture) -or
         ($details.Installation -ine 'Client')) {
-        Write-Host 'Архитектура или тип установки ISO не соответствует текущей Windows.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheISOArchitectureOr_591 -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Language -eq '') -or ($details.Language -eq '') -or
         ($details.Language -ine $OsProfile.Language)) {
-        Write-Host ('Не совпадает или не определён язык: текущий {0}; ISO {1}.' -f $OsProfile.Language, $details.Language) -ForegroundColor Yellow
-        Write-Host 'Для сохранения приложений язык установочного носителя должен соответствовать языку исходной установки Windows.' -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.LanguageMismatchOrUnknown_596 -f $OsProfile.Language, $details.Language) -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.ToKeepAppsThe_597 -ForegroundColor Yellow
         return
     }
     try {
         $installed = [version]$OsProfile.Version
         $target = [version]$details.Version
         if ($target -lt $installed) {
-            Write-Host ('ISO содержит более раннюю версию Windows ({0} < {1}).' -f $target, $installed) -ForegroundColor Yellow
-            Write-Host 'Автоматический запуск Setup отменён, чтобы избежать отката версии.' -ForegroundColor Yellow
+            Write-Host ($script:RepairMessages.TheISOContainsAn_604 -f $target, $installed) -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.AutomaticSetupLaunchCanceled_605 -ForegroundColor Yellow
             return
         }
     } catch {
-        Write-Host 'Не удалось надёжно сравнить версии Windows и образа. Запускайте Setup вручную.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotReliablyCompare_609 -ForegroundColor Yellow
         return
     }
 
@@ -581,39 +582,39 @@ function Offer-InPlaceWindowsSetup {
     if (($details.ServicePackBuild -ne '') -and ($details.ServicePackBuild -ne '0')) {
         $targetVersion += '.' + $details.ServicePackBuild
     }
-    Write-Host '================== СРАВНЕНИЕ РЕДАКЦИЙ ==================' -ForegroundColor Cyan
-    Write-Host 'Текущая Windows:' -ForegroundColor Cyan
-    Write-Host ('  Название:       {0}' -f $OsCaption)
-    Write-Host ('  Редакция:       {0}' -f $OsProfile.Edition)
-    Write-Host ('  Версия:         {0}' -f $OsProfile.Version)
-    Write-Host ('  Архитектура:    {0}' -f $OsProfile.Architecture)
-    Write-Host ('  Язык:           {0}' -f $OsProfile.Language)
-    Write-Host ('Образ ISO (индекс {0}):' -f $index) -ForegroundColor Cyan
-    Write-Host ('  Название:       {0}' -f $details.Name)
-    Write-Host ('  Редакция:       {0}' -f $details.Edition)
-    Write-Host ('  Версия:         {0}' -f $targetVersion)
-    Write-Host ('  Архитектура:    {0}' -f $details.Architecture)
-    Write-Host ('  Язык:           {0}' -f $details.Language)
-    Write-Host ('  Установщик:    {0}' -f $setup)
-    Write-Host 'Совпадение редакции, архитектуры и языка подтверждено; версию ISO проверили.' -ForegroundColor Green
-    Write-Host 'Внимательно проверьте обе редакции и индекс перед запуском.' -ForegroundColor Yellow
+    Write-Host $script:RepairMessages.EDITIONCOMPARISON_623 -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.CurrentWindows_624 -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.Name0_625 -f $OsCaption)
+    Write-Host ($script:RepairMessages.Edition0_626 -f $OsProfile.Edition)
+    Write-Host ($script:RepairMessages.Version0_627 -f $OsProfile.Version)
+    Write-Host ($script:RepairMessages.Architecture0_628 -f $OsProfile.Architecture)
+    Write-Host ($script:RepairMessages.Language0_629 -f $OsProfile.Language)
+    Write-Host ($script:RepairMessages.ISOImageIndex0_630 -f $index) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.Name0_631 -f $details.Name)
+    Write-Host ($script:RepairMessages.Edition0_632 -f $details.Edition)
+    Write-Host ($script:RepairMessages.Version0_633 -f $targetVersion)
+    Write-Host ($script:RepairMessages.Architecture0_634 -f $details.Architecture)
+    Write-Host ($script:RepairMessages.Language0_635 -f $details.Language)
+    Write-Host ($script:RepairMessages.Installer0_636 -f $setup)
+    Write-Host $script:RepairMessages.EditionArchitectureAndLanguage_637 -ForegroundColor Green
+    Write-Host $script:RepairMessages.CarefullyReviewBothEditions_638 -ForegroundColor Yellow
     Write-Host ''
-    if (-not (Ask-YesNo ('Запустить установку Windows поверх с сохранением программ и данных ({0})?' -f $args) $true)) {
-        Write-Host 'Запуск установки отменён пользователем.'
+    if (-not (Ask-YesNo ($script:RepairMessages.StartAnInPlace_640 -f $args) $true)) {
+        Write-Host $script:RepairMessages.InstallationCanceledByThe_641
         return
     }
     try {
         # Windows Setup runs independently. The console remains open at script
         # exit only when the original launch was from Explorer.
         $process = Start-Process -FilePath $setup -ArgumentList $args -PassThru -ErrorAction Stop
-        if ($null -eq $process) { throw 'Start-Process не вернул сведения о процессе.' }
+        if ($null -eq $process) { throw $script:RepairMessages.StartProcessDidNot_648 }
         $script:SetupLaunched = $true
-        Write-Host ('Windows Setup запущен (PID {0}). Следите за его окном и проверками совместимости.' -f $process.Id) -ForegroundColor Green
+        Write-Host ($script:RepairMessages.WindowsSetupStartedPID_650 -f $process.Id) -ForegroundColor Green
     } catch [System.Management.Automation.PipelineStoppedException] {
         throw
     } catch {
         $script:HadError = $true
-        Write-Host ('Не удалось запустить Windows Setup: ' + $_.Exception.Message) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotStartWindows_655 + $_.Exception.Message) -ForegroundColor Red
     }
 }
 
@@ -637,10 +638,10 @@ function Try-RepairFromImage {
         if (($details.ServicePackBuild -ne '') -and ($details.ServicePackBuild -ne '0')) {
             $displayVersion += ('.' + $details.ServicePackBuild)
         }
-        Write-Host ('Версия Windows: {0}; версия образа ISO: {1}' -f $OsProfile.Version, $displayVersion)
+        Write-Host ($script:RepairMessages.WindowsVersion0ISO_679 -f $OsProfile.Version, $displayVersion)
         if (($OsProfile.Version -ne '') -and ($details.Version -ine $OsProfile.Version)) {
-            Write-Host 'Версии различаются: образ для обновления Windows может иметь более новую сборку.' -ForegroundColor Yellow
-            Write-Host 'Для DISM /RestoreHealth важно наличие конкретных версий повреждённых компонентов.' -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.VersionsDifferTheImage_681 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.DISMRestoreHealthNeedsThe_682 -ForegroundColor Yellow
         }
     }
     return (Run-Dism -ImagePath $image -ImageIndex $index)
@@ -653,9 +654,9 @@ try {
         $script:LogPath = Join-Path $folder ('WinRepair_{0}.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
         Start-Transcript -Path $script:LogPath -ErrorAction Stop | Out-Null
         $script:TranscriptOn = $true
-        Write-Host ('Журнал WinRepair: ' + $script:LogPath)
+        Write-Host ($script:RepairMessages.RepairWindowsLog_735 + $script:LogPath)
     } catch {
-        Write-Host ('Не удалось включить журнал действий: ' + $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.CouldNotStartThe_737 + $_.Exception.Message) -ForegroundColor Yellow
     }
 
     $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
@@ -666,38 +667,38 @@ try {
     try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
     $profile = Get-OsImageProfile -OperatingSystem $os -Edition $edition -IsServer $isServer
 
-    Write-Host ('ОС: {0} (версия {1})' -f $os.Caption, $os.Version)
-    Write-Host ('Редакция: {0}; тип: {1}' -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
-    Write-Host 'Скрипт не изменяет WSUS и не чистит кэш; запуск установки Windows и перезагрузка — только после подтверждения.'
-    Write-Host 'Ctrl+C — прервать всю диагностику (включая текущую операцию).' -ForegroundColor Yellow
+    Write-Host ($script:RepairMessages.OS0Version1_750 -f $os.Caption, $os.Version)
+    Write-Host ($script:RepairMessages.Edition0Type1_751 -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
+    Write-Host $script:RepairMessages.TheScriptDoesNot_753
+    Write-Host $script:RepairMessages.CtrlCCancelAll_754 -ForegroundColor Yellow
 
     Test-SystemVolume -OsVersion $version
     $skipWindowsRepair = $script:VolumeScheduled
     if ($script:VolumeNeedsAttention -and (-not $skipWindowsRepair)) {
-        Write-Host 'Исправность файловой системы не подтверждена.' -ForegroundColor Yellow
-        if (-not (Ask-YesNo 'Продолжить DISM/SFC несмотря на состояние диска?' $false)) {
+        Write-Host $script:RepairMessages.FileSystemIntegrityCould_759 -ForegroundColor Yellow
+        if (-not (Ask-YesNo $script:RepairMessages.ContinueWithDISMSFC_760 $false)) {
             $skipWindowsRepair = $true
         }
     }
     if ($skipWindowsRepair) {
-        Write-Host 'DISM и SFC пропущены; сначала исправьте файловую систему.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.DISMAndSFCSkipped_765 -ForegroundColor Yellow
     } else {
         if (-not $canRestoreHealth) {
             Write-Host ''
-            Write-Host 'На Windows 7 / Windows Server 2008 R2 DISM /RestoreHealth не поддерживается.' -ForegroundColor Yellow
-            Write-Host 'Будет выполнен только SFC. Для восстановления хранилища используйте KB947821 (CheckSUR).'
+            Write-Host $script:RepairMessages.DISMRestoreHealthIsNot_769 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.OnlySFCWillRun_770
             Write-Host 'https://www.catalog.update.microsoft.com/Search.aspx?q=KB947821'
         } else {
             if ($isServer) {
                 Write-Host ''
-                Write-Host 'Windows Server: укажите ISO/WIM/ESD, если он доступен (Enter — без источника).' -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.WindowsServerSpecifyAn_775 -ForegroundColor Yellow
                 $script:DiskResult = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer
                 if ($null -eq $script:DiskResult) {
-                    Write-Host 'Источник не выбран. Запускается DISM с настройками источника по умолчанию.'
+                    Write-Host $script:RepairMessages.NoSourceSelectedRunning_778
                     $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
                 }
             } else {
-                Write-Host "`nWindows Client: сначала DISM без ISO." -ForegroundColor Cyan
+                Write-Host $script:RepairMessages.NWindowsClientTryingDISM_782 -ForegroundColor Cyan
                 $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
             }
             if (($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
@@ -705,59 +706,59 @@ try {
                     # The first attempt used the built-in/default source.
                     # A mounted ISO can now be entered without an extra Y/N prompt.
                     Write-Host ''
-                    Write-Host 'DISM не смог восстановить Windows со штатным источником.' -ForegroundColor Yellow
+                    Write-Host $script:RepairMessages.DISMCouldNotRepair_790 -ForegroundColor Yellow
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer
                     if ($null -ne $ret) { $script:DiskResult = $ret }
-                    else { Write-Host 'Источник восстановления не выбран. Переходим к SFC.' -ForegroundColor Yellow }
-                } elseif (Ask-YesNo 'Восстановление с выбранным образом не удалось. Попробовать другой ISO/WIM/ESD?' $true) {
+                    else { Write-Host $script:RepairMessages.NoRepairSourceSelected_793 -ForegroundColor Yellow }
+                } elseif (Ask-YesNo $script:RepairMessages.RepairWithTheSelected_794 $true) {
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -AskForDrive
                     if ($null -ne $ret) { $script:DiskResult = $ret }
-                    else { Write-Host 'Повторное восстановление с ISO отменено. Исходная ошибка DISM сохраняется.' -ForegroundColor Yellow }
+                    else { Write-Host $script:RepairMessages.RetryUsingISOCanceled_797 -ForegroundColor Yellow }
                 }
             }
         }
 
         # SFC must NOT be in finally: Ctrl+C must not launch the next repair operation.
-        Write-Host "`nПроверка системных файлов: SFC /scannow" -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.NCheckingSystemFilesSFC_803 -ForegroundColor Cyan
         $script:SfcResult = Invoke-RepairExecutable -Executable $script:SfcExe -Arguments '/scannow'
     }
     Write-Host ''
-    Write-Host '====================== ИТОГ ======================' -ForegroundColor Cyan
-    Write-Host ('Системный том: ' + $script:VolumeStatus)
-    if ($script:VolumeScheduled) { Write-Host 'Исправление запланировано при загрузке.' -ForegroundColor Yellow }
+    Write-Host $script:RepairMessages.SUMMARY_807 -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.SystemVolume_808 + $script:VolumeStatus)
+    if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup_809 -ForegroundColor Yellow }
     if ($null -ne $script:DiskResult) {
         Write-Host ('DISM: ' + (Format-ExitCode $script:DiskResult))
     } else {
-        Write-Host 'DISM: не запускался или восстановление отменено.'
+        Write-Host $script:RepairMessages.DISMNotRunOr_813
     }
     if ($null -ne $script:SfcResult) {
         Write-Host ('SFC:  ' + (Format-ExitCode $script:SfcResult))
     } else {
-        Write-Host 'SFC: не запускался.'
+        Write-Host $script:RepairMessages.SFCNotRun_818
     }
-    Write-Host 'Результат SFC нужно оценить также по тексту его сообщения.'
-    Write-Host ('DISM журнал: ' + (Join-Path $env:SystemRoot 'Logs\DISM\dism.log'))
-    Write-Host ('CBS журнал:  ' + (Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'))
+    Write-Host $script:RepairMessages.AlsoEvaluateTheSFC_820
+    Write-Host ($script:RepairMessages.DISMLog_821 + (Join-Path $env:SystemRoot 'Logs\DISM\dism.log'))
+    Write-Host ($script:RepairMessages.CBSLog_822 + (Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'))
     if ($script:LogPath -ne $null -and $script:TranscriptOn) {
-        Write-Host ('Журнал WinRepair: ' + $script:LogPath)
+        Write-Host ($script:RepairMessages.RepairWindowsLog_824 + $script:LogPath)
     }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
-        Write-Host 'DISM не восстановил хранилище. Проверьте сообщения DISM и CBS.' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.DISMDidNotRepair_827 -ForegroundColor Yellow
         Write-Host ''
-        Write-Host 'Если восстановление через DISM/ISO не помогает:' -ForegroundColor Yellow
-        Write-Host '  Рассмотрите установку совместимой версии Windows поверх существующей.'
-        Write-Host '  Из запущенной Windows смонтируйте ISO и запустите setup.exe.'
-        Write-Host '  Выбирайте только «Сохранить личные файлы и приложения».'
-        Write-Host '  Если такой вариант недоступен, отмените установку.'
-        Write-Host '  Перед установкой создайте резервную копию важных данных.'
+        Write-Host $script:RepairMessages.IfDISMISORepair_829 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.ConsiderInstallingACompatible_830
+        Write-Host $script:RepairMessages.MountAnISOFrom_831
+        Write-Host $script:RepairMessages.SelectKeepPersonalFiles_832
+        Write-Host $script:RepairMessages.IfThatOptionIs_833
+        Write-Host $script:RepairMessages.BackUpImportantData_834
         $script:HadError = $true
     }
     if (($null -ne $script:SfcResult) -and ($script:SfcResult -ne 0)) { $script:HadError = $true }
     if ($script:VolumeNeedsAttention) { $script:HadError = $true }
-    if ($script:DiskResult -eq 3010) { Write-Host 'DISM сообщил, что требуется перезагрузка (она не выполнялась).' -ForegroundColor Yellow }
+    if ($script:DiskResult -eq 3010) { Write-Host $script:RepairMessages.DISMReportedThatA_839 -ForegroundColor Yellow }
 
     Write-Host ''
-    Write-Host 'Для просмотра результата в новом окне PowerShell:' -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.ToViewTheResult_842 -ForegroundColor Cyan
     if ($script:LogPath -ne $null -and (Test-Path -LiteralPath $script:LogPath)) {
         # Quoting with doubled apostrophes keeps the command copyable even
         # when the log directory contains apostrophes.
@@ -767,7 +768,7 @@ try {
         Write-Host 'Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content | Select-Object -Last 80'
     }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
-        Write-Host 'Последние характерные ошибки CBS:' -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RecentCharacteristicCBSErrors_852 -ForegroundColor Yellow
         Write-Host 'Select-String -Path "$env:windir\Logs\CBS\CBS.log" -Pattern "CSI Payload Corrupt","CBS_E_","Missing replacement","Failed to resolve","0x800f" | Select-Object -Last 30'
     }
     Write-Host '=================================================='
@@ -776,8 +777,8 @@ try {
         Offer-InPlaceWindowsSetup -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -OsVersion $version
     }
     if ($script:VolumeScheduled) {
-        Write-Host 'Сохраните файлы перед перезагрузкой; затем повторите WinRepair.'
-        $script:RestartRequested = Ask-YesNo 'Перезагрузить компьютер сейчас?' $false
+        Write-Host $script:RepairMessages.SaveYourFilesBefore_861
+        $script:RestartRequested = Ask-YesNo $script:RepairMessages.RestartTheComputerNow_862 $false
     }
     if ($script:RestartRequested) {
         try {
@@ -786,13 +787,13 @@ try {
         } catch [System.Management.Automation.PipelineStoppedException] {
             throw
         } catch {
-            Write-Host ('Не удалось перезагрузить компьютер: ' + $_.Exception.Message) -ForegroundColor Red
+            Write-Host ($script:RepairMessages.CouldNotRestartThe_871 + $_.Exception.Message) -ForegroundColor Red
             $script:HadError = $true
         }
     }
 } catch {
     # All unexpected failures, including cancellation, end the complete script.
-    Write-Host ('Ошибка WinRepair: ' + $_.Exception.Message) -ForegroundColor Red
+    Write-Host ($script:RepairMessages.RepairWindowsError_877 + $_.Exception.Message) -ForegroundColor Red
     throw
 } finally {
     # Never start a repair operation from finally: only cleanup belongs here.
