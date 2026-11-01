@@ -29,15 +29,27 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64, где пр�
 
 ## Установка и обновление
 
-Скачайте [`update.ps1`](update.ps1), откройте Windows PowerShell 5.1 и перейдите в каталог, куда хотите установить PSWinKit. Запустите скачанный скрипт, например:
+Откройте Windows PowerShell 5.1 **в существующем каталоге**, куда хотите установить PSWinKit. Скачайте и запустите загрузчик непосредственно из PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Path 'C:\Tools\PSWinKit' -Force | Out-Null
-Set-Location 'C:\Tools\PSWinKit'
-& "$env:TEMP\update.ps1" # Пример, если файл скачан в TEMP
+$url = 'https://raw.githubusercontent.com/avmaksimov/PSWinKit/main/update.ps1'
+$script = Join-Path $env:TEMP 'PSWinKit-bootstrap.ps1'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+try {
+    Invoke-WebRequest -Uri $url -OutFile $script -UseBasicParsing -ErrorAction Stop
+    & $script
+} finally {
+    Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
+}
 ```
 
-**Каталог назначения всегда определяется по текущему рабочему каталогу** (`Get-Location`), а не по расположению скрипта. Для последующих обновлений перейдите в каталог установки и запустите `./update.ps1`. Скрипт проверяет последний коммит `main` на GitHub, отображает его дату и короткий SHA и не скачивает архив, если установлен тот же коммит. Иначе скачивает архив конкретного коммита и запускает свежий [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) из временного каталога. Если GitHub API недоступен, пробует скачать `main.zip` без подтверждённой информации о коммите. Установщик использует соответствующие новые версии Common и централизованные переводы `Common/Languages`, без обязательного повышения прав (если в целевой каталог разрешена запись).
+Для последующих обновлений откройте PowerShell **в каталоге установленного PSWinKit** и выполните:
+
+```powershell
+.\update.ps1
+```
+
+**Каталог назначения всегда определяется по текущему рабочему каталогу** (`Get-Location`), а не по расположению скрипта. Скрипт проверяет последний коммит `main` на GitHub, отображает его дату и короткий SHA и не скачивает архив, если установлен тот же коммит. Иначе скачивает архив конкретного коммита и запускает свежий [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) из временного каталога. Если GitHub API недоступен, пробует скачать `main.zip` без подтверждённой информации о коммите. Установщик использует соответствующие новые версии Common и централизованные переводы `Common/Languages`, без обязательного повышения прав (если в целевой каталог разрешена запись).
 
 Перед подтверждением проверьте каталог назначения и общую сводку `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE`. Установщик сохраняет посторонние файлы, исключает из обработки компоненты путей с точкой в начале (включая служебные файлы Git) и не копирует самого себя. Локальный `install.psd1` содержит список `installed-files` для удаления устаревших файлов и отдельную секцию `install-info` с полным SHA и датой коммита в UTC. При установке архива без подтверждённого коммита поля версии остаются пустыми; отсутствие секции `install-info` означает первую установку. При отсутствии или повреждении файла либо списка устаревшие файлы не удаляются. Содержимое сравнивается по SHA-256; все изменения, включая удаление, подтверждаются один раз. Резервные копии старых версий и автоматический откат не предусмотрены. Не редактируйте `install.psd1` вручную.
 

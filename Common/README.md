@@ -1,7 +1,5 @@
 # PSWinKit — PowerShell utility development contract
 
-**Version 1.1 (Start-Utility / Stop-Utility, regional formatting)**
-**Status: agreed architecture contract.**
 This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Repair-Windows`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
 
 ## 1. Scope and design principles
@@ -13,7 +11,7 @@ This file is both the documentation for `Common/Common.ps1` and the mandatory co
 - Do not move utility-specific logic into Common or add speculative architectural complexity.
 - This contract states the intended behavior; implementation must be verified on supported Windows versions.
 
-## 2. Compatibility and file encoding
+## 2. System requirements and file encoding
 
 Baseline: **Windows 10+, Windows Server 2016+, Windows PowerShell 5.1**; x86/x64 where supported. Neither PowerShell 7+, unsupported legacy operating systems nor third-party dependencies may be required by the shared library.
 
@@ -50,7 +48,9 @@ Future utilities have their own folders, but all translations are held centrally
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
 ```
 
-Never copy Common into utility folders or locate resources using the current working directory.
+Never copy Common into utility folders or resolve **utility resources** using the current working directory. **Installation destination** is an intentional exception:
+
+`update.ps1` is an independent, English-only bootstrap script without a Common dependency. It checks GitHub for a new commit and runs the fresh `install.ps1` from the downloaded archive. `install.ps1` uses that archive's Common and translations. Both use the **current working directory** as the installation destination. `install.psd1` is generated locally to record installed files and commit metadata. See the root README for installation and update commands.
 
 ## 4. Main utility parameters
 
@@ -204,6 +204,6 @@ Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not 
 
 ## 14. Contract changes
 
-When changing Common, preserve compatibility or explicitly agree on a break; update **both** `Common/README.*` documents, and root/affected-utility READMEs when relevant; validate on actual Windows PowerShell 5.1. Requirements specific to a single utility belong in its own README and do not automatically become shared policy.
+The contract documents the **current** architecture. Do not number contract revisions or require backward compatibility with older revisions. When changing Common, update **both** `Common/README.*` documents and the root/affected-utility READMEs where needed; validate on actual Windows PowerShell 5.1. Requirements specific to a single utility belong in its own README and do not automatically become shared policy.
 
 **Core principle:** common infrastructure, independent utilities, no mandatory parameters, minimal complexity.

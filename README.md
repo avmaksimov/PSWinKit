@@ -29,15 +29,27 @@ For utility-specific instructions and safety warnings, follow the utility link a
 
 ## Installation and updates
 
-Download [`update.ps1`](update.ps1), open Windows PowerShell 5.1 and change to your intended installation directory. Run the downloaded script, for example:
+Open Windows PowerShell 5.1 **in the existing directory** where you want to install PSWinKit. Download and run the updater directly from PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Path 'C:\Tools\PSWinKit' -Force | Out-Null
-Set-Location 'C:\Tools\PSWinKit'
-& "$env:TEMP\update.ps1" # Example if downloaded to TEMP
+$url = 'https://raw.githubusercontent.com/avmaksimov/PSWinKit/main/update.ps1'
+$script = Join-Path $env:TEMP 'PSWinKit-bootstrap.ps1'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+try {
+    Invoke-WebRequest -Uri $url -OutFile $script -UseBasicParsing -ErrorAction Stop
+    & $script
+} finally {
+    Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
+}
 ```
 
-The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. For later updates, use `./update.ps1` after changing to the installed directory. `update.ps1` checks the latest `main` commit on GitHub, displays its date and short SHA, and skips downloading when it matches the installed commit. When different, it downloads an archive pinned to that commit and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. If the GitHub API is unavailable, it attempts `main.zip` without verified commit metadata. That installer uses the matching Common and centralized `Common/Languages` translations without requiring administrator rights (unless the destination itself requires them).
+For subsequent updates, open PowerShell in the **installed PSWinKit directory** and run:
+
+```powershell
+.\update.ps1
+```
+
+The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. `update.ps1` checks the latest `main` commit on GitHub, displays its date and short SHA, and skips downloading when it matches the installed commit. When different, it downloads an archive pinned to that commit and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. If the GitHub API is unavailable, it attempts `main.zip` without verified commit metadata. That installer uses the matching Common and centralized `Common/Languages` translations without requiring administrator rights (unless the destination itself requires them).
 
 Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. An unverified ZIP installation records empty commit fields; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
 
