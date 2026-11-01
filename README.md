@@ -9,10 +9,10 @@
 | Utility | Purpose | Status |
 | --- | --- | --- |
 | [Remove-Paths](Remove-Paths/README.md) | Interactively and permanently delete selected files and directories, including protected folders | **Available** |
-| WinRepair | Windows system repair | Planned migration |
+| [Repair-Windows](Repair-Windows/README.md) | Windows repair using CHKDSK, DISM and SFC | **Available** |
 | WinRE-Manager | Manage and repair Windows Recovery Environment | Planned migration |
 
-Only **Remove-Paths** is included now. **WinRepair** and **WinRE-Manager** will be moved into this repository later; no release date is promised.
+**Remove-Paths** and **Repair-Windows** are included. **WinRE-Manager** is planned for migration.
 
 ## Requirements and use
 
@@ -22,6 +22,7 @@ From a PowerShell console in the repository root:
 
 ```powershell
 .\Remove-Paths\Remove-Paths.ps1
+.\Repair-Windows\Repair-Windows.ps1
 ```
 
 For utility-specific instructions and safety warnings, follow the utility link above. Preserve the directory layout; each utility loads `Common/Common.ps1` by a relative path.
@@ -30,6 +31,7 @@ For utility-specific instructions and safety warnings, follow the utility link a
 
 - [`Common/README.md`](Common/README.md) — **full shared API documentation and the development contract**.
 - [`Remove-Paths/README.md`](Remove-Paths/README.md) — Remove-Paths usage, behavior and limitations.
+- [`Repair-Windows/README.md`](Repair-Windows/README.md) — Repair-Windows usage, safety and limitations.
 - [`README.ru.md`](README.ru.md) — this overview in Russian.
 
 The project is available under the [MIT License](LICENSE).

@@ -1,4 +1,4 @@
-﻿#requires -Version 2.0
+﻿#requires -Version 5.1
 <#
 WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 - Windows client 8+: first try DISM with default source. Offer ISO/WIM/ESD on failure.
@@ -10,48 +10,9 @@ WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 - No WSUS policy changes, component cleanup or cache reset; reboot only with consent.
 - Compatible with Windows PowerShell 2.0 (shipped with Windows 7).
 #>
-# Internal switches preserve the launch mode when relaunching via UAC.
-param([switch]$PauseAtExit, [switch]$NoPauseAtExit)
-
-# Only an Explorer-initiated, dedicated PowerShell process waits for a key.
-# -File alone is insufficient: terminals can use powershell.exe -File too.
-function Test-ExplorerLaunch {
-    try {
-        if (-not [Environment]::UserInteractive) { return $false }
-        $current = Get-WmiObject -Class Win32_Process -Filter ("ProcessId = {0}" -f $PID) -ErrorAction Stop
-        if ($null -eq $current) { return $false }
-        $commandLine = [string]$current.CommandLine
-        # -NoExit indicates a console that the caller explicitly keeps open.
-        if ($commandLine -match '(?i)(?:^|\s)-noexit\b') { return $false }
-        if ($commandLine -notmatch '(?i)(?:^|\s)-(?:file|command)\b') { return $false }
-        $parent = Get-WmiObject -Class Win32_Process -Filter ("ProcessId = {0}" -f $current.ParentProcessId) -ErrorAction Stop
-        if ($null -eq $parent) { return $false }
-        # An already elevated Explorer launch may be parented by UAC AppInfo
-        # (svchost.exe) instead of explorer.exe.
-        $parentName = ([string]$parent.Name).ToLowerInvariant()
-        return (@('explorer.exe', 'svchost.exe', 'consent.exe') -contains $parentName)
-    } catch { return $false }
-}
-function Wait-ForExitKey {
-    if (-not $script:PauseAtExit) { return }
-    Write-Host ''
-    Write-Host 'Нажмите любую клавишу для закрытия окна...'
-    try {
-        [void][Console]::ReadKey($true)
-    } catch {
-        # ReadKey is not available for every console host; Read-Host is a
-        # compatible fallback on Windows PowerShell 2.0 and later.
-        try { [void](Read-Host 'Нажмите Enter для выхода') } catch { }
-    }
-}
-if ($NoPauseAtExit) {
-    $script:PauseAtExit = $false
-} elseif ($PauseAtExit) {
-    $script:PauseAtExit = $true
-} else {
-    $script:PauseAtExit = Test-ExplorerLaunch
-}
-$script:ElevationStarted = $false
+. (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
+if ($null -eq $utility) { return }
 
 
 $script:DiskResult = $null
@@ -686,46 +647,6 @@ function Try-RepairFromImage {
 }
 
 try {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object -TypeName System.Security.Principal.WindowsPrincipal -ArgumentList $identity
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host 'Требуются права администратора. Запрашиваю повышение прав (UAC)...' -ForegroundColor Yellow
-        try {
-            $scriptFile = [string]$MyInvocation.MyCommand.Path
-            if ([string]::IsNullOrEmpty($scriptFile) -or
-                -not (Test-Path -LiteralPath $scriptFile -PathType Leaf)) {
-                throw 'Save WinRepair.ps1 to a file before requesting elevation.'
-            }
-            # As in WinRE-Manager: mapped drives may disappear after elevation.
-            # Use a UNC path if the current file is on a mapped network drive.
-            if ($scriptFile -match '^[A-Za-z]:\\') {
-                $driveLetter = $scriptFile.Substring(0, 2)
-                $disk = Get-WmiObject -Class Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $driveLetter) -ErrorAction SilentlyContinue
-                if (($null -ne $disk) -and ([int]$disk.DriveType -eq 4) -and
-                    (-not [string]::IsNullOrEmpty([string]$disk.ProviderName))) {
-                    $scriptFile = ([string]$disk.ProviderName).TrimEnd('\') + $scriptFile.Substring(2)
-                    Write-Host ('Сетевой диск: использую UNC-путь ' + $scriptFile)
-                }
-            }
-            # Preserve original launch mode for the elevated process. In
-            # particular, a terminal-origin UAC launch must NOT start pausing.
-            $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptFile
-            if ($script:PauseAtExit) {
-                $arguments += ' -PauseAtExit'
-            } else {
-                $arguments += ' -NoPauseAtExit'
-            }
-            # Use a guaranteed local working directory (not a mapped network drive).
-            Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') `
-                -ArgumentList $arguments -Verb RunAs -WorkingDirectory $env:SystemRoot -ErrorAction Stop | Out-Null
-            Write-Host 'PowerShell с правами администратора запущен. Продолжайте в новом окне.'
-            $script:ElevationStarted = $true
-            return
-        } catch {
-            Write-Host ('Не удалось получить права администратора: ' + $_.Exception.Message) -ForegroundColor Red
-            throw
-        }
-    }
 
     try {
         $folder = $env:TEMP
@@ -745,11 +666,8 @@ try {
     try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
     $profile = Get-OsImageProfile -OperatingSystem $os -Edition $edition -IsServer $isServer
 
-    Write-Host '==============================================================='
-    Write-Host 'WinRepair: проверка диска, DISM, SFC' -ForegroundColor Cyan
     Write-Host ('ОС: {0} (версия {1})' -f $os.Caption, $os.Version)
     Write-Host ('Редакция: {0}; тип: {1}' -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
-    Write-Host '==============================================================='
     Write-Host 'Скрипт не изменяет WSUS и не чистит кэш; запуск установки Windows и перезагрузка — только после подтверждения.'
     Write-Host 'Ctrl+C — прервать всю диагностику (включая текущую операцию).' -ForegroundColor Yellow
 
@@ -877,14 +795,11 @@ try {
     Write-Host ('Ошибка WinRepair: ' + $_.Exception.Message) -ForegroundColor Red
     throw
 } finally {
-    # Only cleanup belongs here. Never launch SFC after Ctrl+C.
+    # Never start a repair operation from finally: only cleanup belongs here.
     if ($script:TranscriptOn) {
         try { Stop-Transcript | Out-Null } catch { }
     }
-    # Also applies after launching Setup; never pause the launching instance
-    # when it has handed off execution to a separate elevated process.
-    if ((-not $script:ElevationStarted) -and (-not $script:RestartInitiated)) {
-        Wait-ForExitKey
-    }
+    if ($script:RestartInitiated) { $utility.PauseOnExit = $false }
+    Stop-Utility -Utility $utility
 }
 if ($script:HadError) { exit 1 } else { exit 0 }

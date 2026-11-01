@@ -4,7 +4,7 @@
 
 **Version 1.1 (Start-Utility / Stop-Utility, regional formatting)**
 **Status: agreed architecture contract.**
-This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, future `WinRepair` and `WinRE-Manager`, and all subsequent PSWinKit utilities.
+This file documents `Common/Common.ps1` and defines the mandatory contract for `Remove-Paths`, `Repair-Windows`, future `WinRE-Manager`, and subsequent PSWinKit utilities.
 
 ## 1. Scope and design principles
 

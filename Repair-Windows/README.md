@@ -1,22 +1,22 @@
-# WinRepair
+# Repair-Windows
 
-Windows repair diagnostics for **Windows 7/8/8.1/10/11** and compatible Windows Server versions. `WinRepair.ps1` checks the system volume with Repair-Volume/CHKDSK, then runs Microsoft's built-in DISM and SFC tools and helps select a compatible Windows installation image when the default repair source fails.
+Windows repair diagnostics for **Windows 10/11 and Windows Server 2016+**. `Repair-Windows.ps1` checks the system volume with Repair-Volume/CHKDSK, then runs DISM and SFC and helps select a compatible installation image when the default repair source fails.
 
-**[Русская документация](README.ru.md)**
+**English** | [Русский](README.ru.md)
 
 > [!IMPORTANT]
 > Run as an administrator and back up important data first. The tool can repair Windows system files and the component store, but it does not change WSUS policies, reset Windows Update caches, or remove components; reboot is available only after explicit confirmation. It is not a guarantee that component-store corruption can be fixed.
 
 ## Requirements
 
-- Run `WinRepair.ps1` directly; no CMD launcher or supporting scripts are required.
-- Windows PowerShell 2.0 or later for the repair script (including stock Windows 7); both 32-bit and 64-bit Windows are supported. Run from an interactive Windows console with access to DISM/SFC. The optional `update.ps1` requires **Windows PowerShell 5.1** and an internet connection.
-- Administrator permissions. The PowerShell script requests UAC elevation when needed; on mapped network drives it attempts to convert the path to UNC before relaunching the same PS1 directly. If the elevated account cannot access the share, copy the script to a local drive.
+- Windows 10+, Windows Server 2016+, Windows PowerShell 5.1, x86/x64 where supported.
+- Use the complete PSWinKit directory structure; `Repair-Windows.ps1` requires `../Common/Common.ps1` and language files. No CMD launcher is required.
+- Administrator privileges. The PSWinKit common library requests UAC when needed; if a network share is inaccessible to the elevated user, run from a local directory.
 - On Windows 8/Server 2012 or newer, DISM `/RestoreHealth` is supported. Windows 7/Server 2008 R2 uses SFC only; consider Microsoft CheckSUR (KB947821) for servicing-store repairs.
 
 ## Run
 
-Right-click `WinRepair.ps1` and select **Run with PowerShell**, or invoke `& '.\WinRepair.ps1'` in a PowerShell console. It requests elevation with UAC if needed; Explorer-launched windows, including already-elevated launches, wait for a key at completion. Separately started PowerShell processes with `-File` / `-Command` also pause. It stays interactive and writes a PowerShell transcript to `%TEMP%` (subject to normal temporary-file cleanup). Windows-owned DISM/CBS logs remain at `%windir%\Logs\DISM\dism.log` and `%windir%\Logs\CBS\CBS.log`. Previously created `%ProgramData%\WinRepair\Logs` logs are not deleted automatically.
+Right-click `Repair-Windows.ps1` and select **Run with PowerShell**, or invoke `& '.\Repair-Windows.ps1'` from this directory. PSWinKit Common handles UAC and the final pause. The tool writes a PowerShell transcript to `%TEMP%`; native DISM/CBS logs remain under `%windir%\Logs`. Existing legacy `WinRepair_*.log` files remain unchanged.
 
 WinRepair first checks the **system volume** (`%SystemDrive%`, usually `C:`). On Windows 8 / Server 2012 or later it prefers `Repair-Volume -Scan` and can offer `-SpotFix` / `-OfflineScanAndFix`. On Windows 7 / Server 2008 R2, or when the cmdlet is unavailable, it falls back to read-only `chkdsk`. Scheduling a boot-time fix and an immediate reboot each require explicit confirmation. DISM/SFC are postponed if a boot repair is scheduled. `/r` is not run by default.
 
@@ -57,29 +57,15 @@ When DISM fails, WinRepair prints an additional copyable one-line command to ins
 
 See Microsoft's [Repair a Windows Image](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/repair-a-windows-image) and [Configure a Windows Repair Source](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/configure-a-windows-repair-source) guidance.
 
-## Install or update from GitHub
+## Installation in PSWinKit
 
-Open **Windows PowerShell 5.1**, navigate to the desired installation directory, and run the following single block. The temporary updater is removed automatically:
+Keep the [PSWinKit](https://github.com/avmaksimov/PSWinKit) repository directory structure and launch the tool from the repository root:
 
 ```powershell
-& {
-    $f = Join-Path $env:TEMP ("WinRepair-Update-$([guid]::NewGuid().ToString('N')).ps1")
-    $url = 'https://raw.githubusercontent.com/avmaksimov/WinRepair/main/update.ps1'
-    try {
-        Invoke-WebRequest -UseBasicParsing $url -OutFile $f -ErrorAction Stop
-        & $f
-    }
-    finally {
-        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
-    }
-}
+.\Repair-Windows\Repair-Windows.ps1
 ```
 
-`update.ps1` is adapted from the [WinRE-Manager installer](https://github.com/avmaksimov/WinRE-Manager/blob/main/install.ps1). It uses the **current PowerShell working directory**, not the location of `update.ps1`. It downloads the GitHub source ZIP using `Invoke-WebRequest`, extracts it into `%TEMP%`, skips dot-prefixed files and folders, compares SHA-256 values, and lists every repository file as `INSTALL`, `REPLACE`, or `UNCHANGED`. It asks for **one `Y/N` confirmation** before changes. Files to be replaced are staged as `.new` next to their destination and then moved into place. Unchanged and unrelated files are left untouched; no old copies or updater logs are created. New repository files are discovered automatically, including files in subdirectories.
-
-**Windows 7 with PowerShell 2.0:** download the ZIP manually and run `WinRepair.ps1`; the updater needs PowerShell 5.1. Network connectivity is required only for the updater and optional DISM Windows Update fallback, not for normal SFC.
-
-The updater does not delete legacy `CheckWin-smart.cmd`, `CheckWin-smart.ps1`, or previously created log files; remove unused old scripts manually. No CMD file is included in this repository.
+The shared `../Common/Common.ps1` handles startup, UAC, localization and shutdown. The old standalone `update.ps1` is no longer used. Its previous versions remain accessible in Git history.
 
 ## Limitations
 
@@ -88,14 +74,16 @@ The updater does not delete legacy `CheckWin-smart.cmd`, `CheckWin-smart.ps1`, o
 - The script is not a replacement for offline repairs or reinstalling Windows when the component store cannot be repaired.
 - Ctrl+C attempts to interrupt the entire process; always inspect the final DISM/CBS state after interruption.
 
-## Repository contents
+## Files
 
 ```text
-WinRepair.ps1
-update.ps1
+Repair-Windows.ps1
+Languages/en.psd1
+Languages/ru.psd1
 README.md
 README.ru.md
-LICENSE
 ```
 
-License: [MIT](LICENSE).
+Common library and [development contract](../Common/README.md) are in `../Common/`. License: [MIT](../LICENSE).
+
+> **Localization:** Repair workflow messages remain in Russian pending a separate localization pass. Shared startup and shutdown messages follow the selected UI language.
