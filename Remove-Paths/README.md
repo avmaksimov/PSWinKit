@@ -49,7 +49,7 @@ The global clock starts in `Start-Utility` after privilege checks/elevation, bef
 ## Project structure
 
 - `Remove-Paths.ps1` — the utility and its deletion logic.
-- `Languages/en.psd1`, `Languages/ru.psd1` — utility title and messages.
+- `../Common/Languages/en.psd1`, `../Common/Languages/ru.psd1` — centralized translations in the `Remove-Paths` section.
 - `../Common/Common.ps1` — UAC, startup, language selection, shared messages and shutdown.
 - [`../Common/README.md`](../Common/README.md) — the **contract** governing all utilities.
 

@@ -59,7 +59,7 @@ function Find-PSWinKitLanguageFile {
 }
 
 function Import-PSWinKitTranslations {
-    param([string]$Folder, [string]$SelectedFile, [switch]$RequireTitle)
+    param([string]$Folder, [string]$SelectedFile, [string]$Section, [switch]$RequireTitle)
     $fallbackFile = Join-Path $Folder 'en.psd1'
     if (-not [IO.File]::Exists($fallbackFile)) { throw "English language file missing: $fallbackFile" }
     $fallback = Import-PowerShellDataFile -LiteralPath $fallbackFile -ErrorAction Stop
@@ -67,13 +67,24 @@ function Import-PSWinKitTranslations {
     if (-not ($fallback -is [hashtable]) -or -not ($selected -is [hashtable])) {
         throw "Invalid translation table: $SelectedFile"
     }
-    if ($RequireTitle -and (-not $fallback.ContainsKey('Title') -or
-        [string]::IsNullOrWhiteSpace([string]$fallback['Title']))) {
-        throw "Missing mandatory Title in English translations: $fallbackFile"
+    if (-not $fallback.ContainsKey($Section) -or -not ($fallback[$Section] -is [hashtable])) {
+        throw "Missing English language section: $Section ($fallbackFile)"
+    }
+    $englishSection = $fallback[$Section]
+    $localSection = @{}
+    if ($selected.ContainsKey($Section)) {
+        if (-not ($selected[$Section] -is [hashtable])) {
+            throw "Invalid language section: $Section ($SelectedFile)"
+        }
+        $localSection = $selected[$Section]
+    }
+    if ($RequireTitle -and (-not $englishSection.ContainsKey('Title') -or
+        [string]::IsNullOrWhiteSpace([string]$englishSection['Title']))) {
+        throw "Missing mandatory Title in English section: $Section ($fallbackFile)"
     }
     $messages = @{}
-    foreach ($key in $fallback.Keys) { $messages[$key] = $fallback[$key] }
-    foreach ($key in $selected.Keys) { $messages[$key] = $selected[$key] }
+    foreach ($key in $englishSection.Keys) { $messages[$key] = $englishSection[$key] }
+    foreach ($key in $localSection.Keys) { $messages[$key] = $localSection[$key] }
     return $messages
 }
 
@@ -151,8 +162,10 @@ function Start-Utility {
 
     $scriptFile = [IO.Path]::GetFullPath($ScriptPath)
     if (-not [IO.File]::Exists($scriptFile)) { throw "Script not found: $scriptFile" }
-    $utilityRoot = [IO.Path]::GetDirectoryName($scriptFile)
-    $utilityLanguages = Join-Path $utilityRoot 'Languages'
+    # The main script's basename selects one section of the central dictionary.
+    # Utility messages remain flat via $utility.Messages.
+    $utilitySection = [IO.Path]::GetFileNameWithoutExtension($scriptFile)
+    $languageFolder = Join-Path $script:PSWinKitCommonRoot 'Languages'
 
     # Internal values are set only by the elevated launch command, not script parameters.
     $inheritedLanguage = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_LANGUAGE')
@@ -162,15 +175,12 @@ function Start-Utility {
     if (-not $LanguageFile -and $inheritedLanguage) { $LanguageFile = $inheritedLanguage }
 
     $explicitLanguage = -not [string]::IsNullOrEmpty($LanguageFile)
-    $selectedFile = Find-PSWinKitLanguageFile -Folder $utilityLanguages -Language $LanguageFile -Explicit:$explicitLanguage
-    $selectedCulture = [IO.Path]::GetFileNameWithoutExtension($selectedFile)
-    $utilityMessages = Import-PSWinKitTranslations -Folder $utilityLanguages -SelectedFile $selectedFile -RequireTitle
+    $selectedFile = Find-PSWinKitLanguageFile -Folder $languageFolder -Language $LanguageFile -Explicit:$explicitLanguage
+    $utilityMessages = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section $utilitySection -RequireTitle
     if (-not $utilityMessages.ContainsKey('Title') -or -not [string]$utilityMessages['Title']) {
-        throw "Missing mandatory Title in utility translations: $selectedFile"
+        throw "Missing mandatory Title in utility translations: $selectedFile ($utilitySection)"
     }
-    $commonLanguages = Join-Path $script:PSWinKitCommonRoot 'Languages'
-    $commonFile = Find-PSWinKitLanguageFile -Folder $commonLanguages -Language $selectedCulture
-    $commonMessages = Import-PSWinKitTranslations -Folder $commonLanguages -SelectedFile $commonFile
+    $commonMessages = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section 'Common'
 
     if ($RequireAdministrator -and -not (Test-PSWinKitAdministrator)) {
         if ($inheritedElevation -eq '1') {

@@ -78,12 +78,10 @@ The shared `../Common/Common.ps1` handles startup, UAC, localization and shutdow
 
 ```text
 Repair-Windows.ps1
-Languages/en.psd1
-Languages/ru.psd1
 README.md
 README.ru.md
 ```
 
 Common library and [development contract](../Common/README.md) are in `../Common/`. License: [MIT](../LICENSE).
 
-> **Localization:** utility messages are stored in `Languages/en.psd1` and `Languages/ru.psd1`; Common messages are separate. Output from DISM, SFC and CHKDSK follows the Windows system language.
+> **Localization:** interface messages are stored in the `Repair-Windows` section of `../Common/Languages/en.psd1` and `../Common/Languages/ru.psd1`; shared lifecycle messages are in the `Common` section. Output from DISM, SFC and CHKDSK follows the Windows system language.

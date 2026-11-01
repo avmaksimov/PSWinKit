@@ -49,7 +49,7 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1, x86/x64, где пр�
 ## Структура и сопровождение
 
 - `Remove-Paths.ps1` — основная утилита, собственная логика удаления.
-- `Languages/en.psd1`, `Languages/ru.psd1` — все сообщения Remove-Paths и его заголовок.
+- `../Common/Languages/en.psd1`, `../Common/Languages/ru.psd1` — централизованные переводы в секции `Remove-Paths`.
 - `../Common/Common.ps1` — запуск, UAC, язык, служебные сообщения и завершение.
 - [`../Common/README.ru.md`](../Common/README.ru.md) — **контракт** для этой и будущих утилит.
 

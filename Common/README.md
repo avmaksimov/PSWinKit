@@ -1,10 +1,8 @@
 # PSWinKit — PowerShell utility development contract
 
-**English** | [Русский](README.ru.md)
-
 **Version 1.1 (Start-Utility / Stop-Utility, regional formatting)**
 **Status: agreed architecture contract.**
-This file documents `Common/Common.ps1` and defines the mandatory contract for `Remove-Paths`, `Repair-Windows`, future `WinRE-Manager`, and subsequent PSWinKit utilities.
+This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Repair-Windows`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
 
 ## 1. Scope and design principles
 
@@ -25,11 +23,10 @@ All `.ps1` and `.psd1` files must use **UTF-8 with BOM**. Documentation is in Ma
 
 ```text
 PSWinKit/
+├── update.ps1
+├── install.ps1
 ├── README.md
 ├── README.ru.md
-├── LICENSE
-├── .gitattributes
-├── .gitignore
 ├── Common/
 │   ├── Common.ps1
 │   ├── README.md
@@ -37,16 +34,17 @@ PSWinKit/
 │   └── Languages/
 │       ├── en.psd1
 │       └── ru.psd1
-└── Remove-Paths/
-    ├── Remove-Paths.ps1
+├── Remove-Paths/
+│   ├── Remove-Paths.ps1
+│   ├── README.md
+│   └── README.ru.md
+└── Repair-Windows/
+    ├── Repair-Windows.ps1
     ├── README.md
-    ├── README.ru.md
-    └── Languages/
-        ├── en.psd1
-        └── ru.psd1
+    └── README.ru.md
 ```
 
-Future utilities each get a separate directory following the same pattern. The shared library is dot-sourced relative to the utility's `$PSScriptRoot`:
+Future utilities have their own folders, but all translations are held centrally in Common/Languages. The shared library is dot-sourced relative to the utility's `$PSScriptRoot`:
 
 ```powershell
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
@@ -97,11 +95,11 @@ For a utility that does not need elevation, omit `-RequireAdministrator`.
 | `LanguageFile` | `[string]` | No | Unspecified |
 | `PauseOnExit` | `[switch]` | No | `$false` |
 
-`ScriptPath` is the main script's `$PSCommandPath`. It determines the utility folder, `Languages`, title and UAC relaunch target. No `Utility`, `Program` or `Section` parameter is used.
+`ScriptPath` is the main script's `$PSCommandPath`. It determines the utility section (script basename), the title and UAC relaunch target. No `Utility`, `Program` or `Section` parameter is used.
 
 **RequireAdministrator.** Check the actual elevated token (the Administrators role enabled in that token), not merely group membership. Request UAC only when required and not already elevated. The elevated process rechecks the token.
 
-**LanguageFile.** Optional developer-level override when calling `Start-Utility`. By default, `Get-UICulture` determines the file: specific culture (`ru-RU.psd1`) → parent (`ru.psd1`) → required `en.psd1`. Explicit relative paths are resolved against the **main script's folder**. A missing file or non-PSD1 path is an initialization error. Preserve the chosen file across UAC even if another account has a different Windows UI language. A main utility need not expose its own `-LanguageFile` parameter.
+**LanguageFile.** Optional developer-level override when calling `Start-Utility`. By default, `Get-UICulture` determines the file: specific culture (`ru-RU.psd1`) → parent (`ru.psd1`) → required `en.psd1`. Explicit relative paths are resolved against **Common/Languages**. A missing file or non-PSD1 path is an initialization error. Preserve the chosen file across UAC even if another account has a different Windows UI language. A main utility need not expose its own `-LanguageFile` parameter.
 
 **PauseOnExit.** Optional forced final pause. Pausing is also mandatory for interactive windows opened by Common through UAC; an existing terminal should not pause unnecessarily. Detection of launches from Explorer is best-effort only. Noninteractive usage should not intentionally block. UAC cancellation causes no pause.
 
@@ -109,7 +107,7 @@ For a utility that does not need elevation, omit `-RequireAdministrator`.
 
 ## 7. Header and start time
 
-As soon as the actual worker has passed its privilege check, `Start-Utility` records start time and starts an independent monotonic `Stopwatch`, before the title and utility work. Waiting for UAC in the original process is not counted. The title is read from `Title` in the **utility's** translations; the `Started` label belongs exclusively to Common:
+As soon as the actual worker has passed its privilege check, `Start-Utility` records start time and starts an independent monotonic `Stopwatch`, before the title and utility work. Waiting for UAC in the original process is not counted. The title is read from `Title` in the **utility's section**; the `Started` label belongs exclusively to Common:
 
 ```text
 === Remove files and directories ===
@@ -134,17 +132,19 @@ If UAC is canceled (`ERROR_CANCELLED`, 1223), the original invocation exits with
 
 ## 9. Localization and ownership
 
-`Common/Languages/en.psd1` and `ru.psd1` contain **only Common lifecycle messages**: `Started`, `Finished`, `Duration`, `DaySuffix`, UAC and pause prompts. Each utility has its own flat `Languages/en.psd1` and `ru.psd1`, containing `Title` and specific messages. Example:
+`Common/Languages/en.psd1` and `ru.psd1` contain all PSWinKit translations, grouped into nested sections: `Common`, `Remove-Paths`, `Repair-Windows`, `install`. The section name for a utility is the main `.ps1` filename without its extension. Each utility continues receiving its own **flat** `$utility.Messages` table; shared lifecycle strings are read only by Common. Example:
 
 ```powershell
-# Remove-Paths/Languages/en.psd1
+# Common/Languages/en.psd1 (excerpt)
 @{
-    Title = 'Remove files and directories'
-    WarningTitle = 'WARNING! PERMANENT DELETION!'
+    Common = @{ Started = 'Started: {0}' }
+    'Remove-Paths' = @{ Title = 'Remove files and directories' }
+    'Repair-Windows' = @{ Title = 'Repair Windows' }
+    install = @{ Title = 'PSWinKit installation and update' }
 }
 ```
 
-`Start-Utility` chooses translations using the Windows UI culture. If the chosen language lacks a key, use the **English PSD1 from the same scope**. If English also lacks the key, report an error rather than silently producing an empty string. **Do not merge Common and utility dictionaries.** Utility messages are available through `$utility.Messages` as templates suitable for `-f` or `[string]::Format`. Utilities must not directly read internal Common translation keys. Repeating short phrases between utility files is acceptable.
+`Start-Utility` loads the required section from the Windows UI language file and fills missing keys from the **same section** in `en.psd1`. Missing English sections or mandatory `Title` values are errors. A utility must never access the `Common` section directly. `LanguageFile`, when explicitly supplied by the developer, refers to a PSD1 in Common/Languages (or an absolute PSD1 path). No additional public function is required.
 
 **Separate regional rule:** `CurrentCulture` determines formatting of dates, times and durations; `Get-UICulture` determines the language of labels. A Russian UI may use English regional dates. The hour/minute/second separator in durations comes from the regional time format. For one day or longer, display a day count with a localized suffix (`1d 03:24:15` or `1д 03:24:15`; the colons are illustrative). Utilities with per-operation timing follow the same rule. **Do not hard-code** `dd.MM.yyyy HH:mm:ss` or `d.hh:mm:ss` as universal formats.
 

@@ -52,7 +52,7 @@ try {
     $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
     if ($roots.Count -ne 1) { throw 'Unexpected ZIP root structure.' }
     $sourceRoot = $roots[0].FullName.TrimEnd('\')
-    foreach ($required in @('install.ps1', 'Common\Common.ps1', 'Languages\en.psd1', 'README.md')) {
+    foreach ($required in @('install.ps1', 'Common\Common.ps1', 'Common\Languages\en.psd1', 'README.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $required) -PathType Leaf)) {
             throw "Invalid PSWinKit ZIP: missing $required"
         }

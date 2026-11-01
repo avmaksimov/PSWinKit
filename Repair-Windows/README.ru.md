@@ -84,12 +84,10 @@ Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descendin
 
 ```text
 Repair-Windows.ps1
-Languages/en.psd1
-Languages/ru.psd1
 README.md
 README.ru.md
 ```
 
 Общая библиотека и [контракт разработки](../Common/README.ru.md) — в `../Common/`. Лицензия: [MIT](../LICENSE).
 
-> **Локализация:** сообщения интерфейса утилиты хранятся в `Languages/ru.psd1` и `Languages/en.psd1`; служебные сообщения Common — отдельно. Вывод системных инструментов DISM, SFC и CHKDSK зависит от языка Windows.
+> **Локализация:** сообщения интерфейса хранятся в секции `Repair-Windows` файлов `../Common/Languages/ru.psd1` и `../Common/Languages/en.psd1`; общие служебные сообщения — в секции `Common`. Вывод системных инструментов DISM, SFC и CHKDSK зависит от языка Windows.
