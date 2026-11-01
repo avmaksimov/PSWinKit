@@ -1,4 +1,4 @@
-# PSWinKit
+﻿# PSWinKit
 
 **English** | [Русский](README.ru.md)
 
@@ -37,9 +37,9 @@ Set-Location 'C:\Tools\PSWinKit'
 & "$env:TEMP\update.ps1" # Example if downloaded to TEMP
 ```
 
-The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. For later updates, use `./update.ps1` after changing to the installed directory. `update.ps1` downloads the latest ZIP and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. That installer uses the matching Common and centralized `Common/Languages` translations without requiring administrator rights (unless the destination itself requires them).
+The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. For later updates, use `./update.ps1` after changing to the installed directory. `update.ps1` checks the latest `main` commit on GitHub, displays its date and short SHA, and skips downloading when it matches the installed commit. When different, it downloads an archive pinned to that commit and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. If the GitHub API is unavailable, it attempts `main.zip` without verified commit metadata. That installer uses the matching Common and centralized `Common/Languages` translations without requiring administrator rights (unless the destination itself requires them).
 
-Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` containing only an `installed-files` list to identify previously installed files that disappeared from the distribution. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
+Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. An unverified ZIP installation records empty commit fields; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
 
 ## Project organization
 
@@ -49,3 +49,5 @@ Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `U
 - [`README.ru.md`](README.ru.md) — this overview in Russian.
 
 The project is available under the [MIT License](LICENSE).
+
+Commit dates are displayed in the Windows local time and regional format. An equal commit SHA skips the file-by-file check; for a manual reinstall use the latest `install.ps1` from the source archive.

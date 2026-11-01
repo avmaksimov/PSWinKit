@@ -3,6 +3,12 @@
 # Installs into Get-Location; Common and translations come from this source tree.
 # Preserves the original SHA-256 / .new / move workflow; no backup copies.
 
+[CmdletBinding()]
+param(
+    [string]$Commit = '',
+    [string]$CommitDate = ''
+)
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
@@ -13,6 +19,19 @@ $target = (Get-Location).ProviderPath
 $utility = Start-Utility -ScriptPath $PSCommandPath
 if ($null -eq $utility) { return }
 $m = $utility.Messages
+$versionDateUtc = ''
+$versionLabel = $m.UnknownVersion
+if (-not [string]::IsNullOrEmpty($Commit) -or -not [string]::IsNullOrEmpty($CommitDate)) {
+    if ($Commit -notmatch '^[0-9a-fA-F]{40}$' -or [string]::IsNullOrWhiteSpace($CommitDate)) {
+        throw $m.InvalidVersion
+    }
+    $parsedDate = [datetimeoffset]::MinValue
+    if (-not [datetimeoffset]::TryParse($CommitDate, [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedDate)) { throw $m.InvalidVersion }
+    $Commit = $Commit.ToLowerInvariant()
+    $versionDateUtc = $parsedDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    $versionLabel = '{0} ({1})' -f $parsedDate.ToLocalTime().ToString('G', [Globalization.CultureInfo]::CurrentCulture), $Commit.Substring(0, 8)
+}
 $stagedFiles = New-Object 'System.Collections.Generic.List[string]'
 $manifest = Join-Path $target 'install.psd1'
 $manifestStage = $manifest + '.new'
@@ -98,9 +117,20 @@ try {
     # or unreadable state means no removals; it never prevents an update.
     $oldNames = @()
     $oldValid = $false
+    $oldCommit = ''
+    $oldCommitDate = ''
+    $oldInfoExists = $false
     if (Test-Path -LiteralPath $manifest -PathType Leaf) {
         try {
             $data = Import-PowerShellDataFile -LiteralPath $manifest -ErrorAction Stop
+            if ($data -is [hashtable] -and $data.ContainsKey('install-info')) {
+                $oldInfoExists = $true
+                $oldInfo = $data['install-info']
+                if ($oldInfo -is [hashtable]) {
+                    $oldCommit = [string]$oldInfo['Commit']
+                    $oldCommitDate = [string]$oldInfo['CommitDate']
+                }
+            }
             $value = $data['installed-files']
             if ($value -is [array] -and $value.Count -gt 0) {
                 $oldSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -143,6 +173,11 @@ try {
 
     # The state file is rewritten when missing or when its inventory changed.
     $manifestChanged = -not $oldValid -or $oldNames.Count -ne $newNames.Count
+    # Update metadata even if the file list is identical. Empty values explicitly
+    # mean that the ZIP was installed without verified GitHub commit metadata.
+    if (-not $oldInfoExists -or $oldCommit -ine $Commit -or $oldCommitDate -cne $versionDateUtc) {
+        $manifestChanged = $true
+    }
     if (-not $manifestChanged) {
         foreach ($entry in $entries) {
             if (-not $oldSet.Contains($entry.Name)) { $manifestChanged = $true; break }
@@ -161,6 +196,7 @@ try {
     Write-Host ''
     Write-Host $m.SummaryTitle -ForegroundColor Cyan
     Write-Host ($m.Destination -f $target) -ForegroundColor Gray
+    Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
     Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
     Write-Host ''
     foreach ($item in @($entries) + @($removals)) {
@@ -220,6 +256,10 @@ try {
         $stateLines += "        '$quoted'"
     }
     $stateLines += '    )'
+    $stateLines += "    'install-info' = @{"
+    $stateLines += "        Commit = '$Commit'"
+    $stateLines += "        CommitDate = '$versionDateUtc'"
+    $stateLines += '    }'
     $stateLines += '}'
     if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
     $manifestStageCreated = $true
