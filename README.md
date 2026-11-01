@@ -29,27 +29,35 @@ For utility-specific instructions and safety warnings, follow the utility link a
 
 ## Installation and updates
 
-Open Windows PowerShell 5.1 **in the existing directory** where you want to install PSWinKit. Download and run the updater directly from PowerShell:
+### Initial installation
+
+Open Windows PowerShell 5.1 **in the existing directory** where you want to install PSWinKit. Download the repository ZIP to a temporary location, extract it, and run `install.ps1`:
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/avmaksimov/PSWinKit/main/update.ps1'
-$script = Join-Path $env:TEMP 'PSWinKit-bootstrap.ps1'
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-try {
-    Invoke-WebRequest -Uri $url -OutFile $script -UseBasicParsing -ErrorAction Stop
-    & $script
-} finally {
-    Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
-}
+$name = 'PSWinKit-' + [guid]::NewGuid().ToString('N')
+$zip = Join-Path $env:TEMP "$name.zip"
+$dir = Join-Path $env:TEMP $name
+
+$url = 'https://github.com/avmaksimov/PSWinKit/archive/refs/heads/main.zip?cacheBust=' + [guid]::NewGuid().ToString('N')
+Invoke-WebRequest -Uri $url `
+    -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } `
+    -OutFile $zip -UseBasicParsing -ErrorAction Stop
+
+Expand-Archive -LiteralPath $zip -DestinationPath $dir
+& (Join-Path $dir 'PSWinKit-main\install.ps1')
 ```
 
-For subsequent updates, open PowerShell in the **installed PSWinKit directory** and run:
+The installer reads the files and translations from the extracted archive, but installs PSWinKit **into the current working directory** (`Get-Location`). There is no need to create the target directory in this example, and `update.ps1` is not used for initial installation. Since this direct installation does not pass commit metadata, `install-info` records an unknown SHA and date until a subsequent update.
+
+### Subsequent updates
+
+From the existing PSWinKit installation directory, run:
 
 ```powershell
 .\update.ps1
 ```
 
-The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. `update.ps1` checks the latest `main` commit on GitHub, displays its date and short SHA, and skips downloading when it matches the installed commit. When different, it downloads an archive pinned to that commit and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. If the GitHub API is unavailable, it attempts `main.zip` without verified commit metadata. That installer uses the matching Common and centralized `Common/Languages` translations without requiring administrator rights (unless the destination itself requires them).
+`update.ps1` compares the installed SHA with the latest commit on GitHub's `main` branch. If they differ or the installed SHA is unknown, it downloads the source archive and invokes a fresh `install.ps1`. When the GitHub API is available, the archive is pinned to a specific commit and its SHA and date are recorded; if the API is unavailable, it falls back to `main.zip` without verified version metadata. The installer does not require elevation unless the destination directory requires it.
 
 Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. An unverified ZIP installation records empty commit fields; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
 

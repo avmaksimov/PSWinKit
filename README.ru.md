@@ -29,27 +29,35 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64, где пр�
 
 ## Установка и обновление
 
-Откройте Windows PowerShell 5.1 **в существующем каталоге**, куда хотите установить PSWinKit. Скачайте и запустите загрузчик непосредственно из PowerShell:
+### Первоначальная установка
+
+Откройте Windows PowerShell 5.1 **в существующем каталоге**, куда хотите установить PSWinKit. Скачайте архив репозитория в `%TEMP%`, распакуйте в уникальный каталог и запустите `install.ps1`:
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/avmaksimov/PSWinKit/main/update.ps1'
-$script = Join-Path $env:TEMP 'PSWinKit-bootstrap.ps1'
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-try {
-    Invoke-WebRequest -Uri $url -OutFile $script -UseBasicParsing -ErrorAction Stop
-    & $script
-} finally {
-    Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
-}
+$name = 'PSWinKit-' + [guid]::NewGuid().ToString('N')
+$zip = Join-Path $env:TEMP "$name.zip"
+$dir = Join-Path $env:TEMP $name
+
+$url = 'https://github.com/avmaksimov/PSWinKit/archive/refs/heads/main.zip?cacheBust=' + [guid]::NewGuid().ToString('N')
+Invoke-WebRequest -Uri $url `
+    -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } `
+    -OutFile $zip -UseBasicParsing -ErrorAction Stop
+
+Expand-Archive -LiteralPath $zip -DestinationPath $dir
+& (Join-Path $dir 'PSWinKit-main\install.ps1')
 ```
 
-Для последующих обновлений откройте PowerShell **в каталоге установленного PSWinKit** и выполните:
+Установщик использует файлы и переводы из распакованного архива, а устанавливает PSWinKit **в текущий рабочий каталог** (`Get-Location`). Создавать каталог в примере не нужно. `update.ps1` для первоначальной установки не вызывается. При такой прямой установке SHA и дата коммита не передаются, поэтому в `install-info` они останутся пустыми до следующего обновления.
+
+### Последующие обновления
+
+Из каталога уже установленного PSWinKit выполните:
 
 ```powershell
 .\update.ps1
 ```
 
-**Каталог назначения всегда определяется по текущему рабочему каталогу** (`Get-Location`), а не по расположению скрипта. Скрипт проверяет последний коммит `main` на GitHub, отображает его дату и короткий SHA и не скачивает архив, если установлен тот же коммит. Иначе скачивает архив конкретного коммита и запускает свежий [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) из временного каталога. Если GitHub API недоступен, пробует скачать `main.zip` без подтверждённой информации о коммите. Установщик использует соответствующие новые версии Common и централизованные переводы `Common/Languages`, без обязательного повышения прав (если в целевой каталог разрешена запись).
+`update.ps1` сравнивает установленный SHA с последним коммитом ветки `main` на GitHub. Если коммит отличается или его SHA неизвестен, скачивает архив и запускает свежий `install.ps1`. При доступном GitHub API скачивается архив конкретного коммита и устанавливается его SHA и дата; если API недоступен, используется `main.zip` без подтверждённых метаданных версии. Установщик не требует повышения прав, если каталог назначения доступен для записи.
 
 Перед подтверждением проверьте каталог назначения и общую сводку `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE`. Установщик сохраняет посторонние файлы, исключает из обработки компоненты путей с точкой в начале (включая служебные файлы Git) и не копирует самого себя. Локальный `install.psd1` содержит список `installed-files` для удаления устаревших файлов и отдельную секцию `install-info` с полным SHA и датой коммита в UTC. При установке архива без подтверждённого коммита поля версии остаются пустыми; отсутствие секции `install-info` означает первую установку. При отсутствии или повреждении файла либо списка устаревшие файлы не удаляются. Содержимое сравнивается по SHA-256; все изменения, включая удаление, подтверждаются один раз. Резервные копии старых версий и автоматический откат не предусмотрены. Не редактируйте `install.psd1` вручную.
 
