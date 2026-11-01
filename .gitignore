@@ -4,3 +4,6 @@
 *.bak
 Thumbs.db
 Desktop.ini
+
+# Local generated installed-files inventory
+/install.psd1

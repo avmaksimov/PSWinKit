@@ -1,8 +1,7 @@
 ﻿#Requires -Version 5.1
-# WinRepair updater, adapted from avmaksimov/WinRE-Manager/install.ps1.
-# Downloads a GitHub source ZIP with Invoke-WebRequest, compares SHA-256,
-# and asks for one Y/N confirmation. Existing unrelated files are preserved.
-# No installer log files, backup copies, or command-line parameters.
+# PSWinKit bootstrap: download the current source ZIP, then run install.ps1.
+# File comparison, installation and cleanup of obsolete files are owned by install.ps1.
+# No command-line parameters, no Common dependency.
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -30,17 +29,16 @@ function Wait-ForExitKey {
 
 $script:PauseAtExit = Test-ExplorerLaunch
 $owner = 'avmaksimov'
-$repository = 'WinRepair'
+$repository = 'PSWinKit'
 $branch = 'main'
 $target = (Get-Location).ProviderPath
 $url = "https://github.com/$owner/$repository/archive/refs/heads/$branch.zip"
 $downloadUrl = $url + '?cacheBust=' + [guid]::NewGuid().ToString('N')
 $noCacheHeaders = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
-$tempDir = Join-Path $env:TEMP ('WinRepair-Update-' + [guid]::NewGuid().ToString('N'))
+$tempDir = Join-Path $env:TEMP ('PSWinKit-Update-' + [guid]::NewGuid().ToString('N'))
 $zip = Join-Path $tempDir 'source.zip'
 $extract = Join-Path $tempDir 'unpacked'
-$stagedFiles = New-Object 'System.Collections.Generic.List[string]'
-$failed = $false
+$installerStarted = $false
 
 try {
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -54,118 +52,22 @@ try {
     $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
     if ($roots.Count -ne 1) { throw 'Unexpected ZIP root structure.' }
     $sourceRoot = $roots[0].FullName.TrimEnd('\')
-
-    # Find all repository files, including nested folders; omit dot-prefixed items.
-    $sourceFiles = @(
-        Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force -ErrorAction Stop |
-            Where-Object {
-                $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
-                $relative -notmatch '(?:^|[\\/])\.'
-            } |
-            Sort-Object { $_.FullName.Substring($sourceRoot.Length).TrimStart('\') }
-    )
-    if ($sourceFiles.Count -eq 0) { throw 'No installable files found in the ZIP.' }
-
-    $entries = @()
-    $changes = @()
-    $unchangedCount = 0
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($sourceFile in $sourceFiles) {
-        if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Unsupported symbolic link in ZIP: $($sourceFile.FullName)"
-        }
-        $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
-        if (-not $seen.Add($name)) { throw "Duplicate path in ZIP: $name" }
-        $from = $sourceFile.FullName
-        $to = Join-Path $target $name
-        if (Test-Path -LiteralPath $to -PathType Container) {
-            throw "Destination is a directory, not a file: $to"
-        }
-        $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
-        $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
-            'INSTALL'
-        } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
-            'REPLACE'
-        } else {
-            'UNCHANGED'
-        }
-        $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
-        $entries += $entry
-        if ($state -eq 'UNCHANGED') { $unchangedCount++ }
-        else { $changes += $entry }
-    }
-
-    if ($changes.Count -eq 0) {
-        Write-Host ''
-        Write-Host 'All files are up to date.' -ForegroundColor Green
-        return
-    }
-
-    $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
-    $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
-    Write-Host ''
-    Write-Host 'INSTALL = new; REPLACE = changed; UNCHANGED = identical SHA-256 (skipped).' -ForegroundColor DarkGray
-    Write-Host ''
-    Write-Host '=== INSTALL/UPDATE SUMMARY ===' -ForegroundColor Cyan
-    Write-Host 'Destination: ' -ForegroundColor Gray -NoNewline
-    Write-Host $target -ForegroundColor White
-    Write-Host ("Changes: {0} to install, {1} to replace; {2} unchanged (skipped)." -f $installCount, $replaceCount, $unchangedCount) -ForegroundColor Gray
-    Write-Host ''
-    foreach ($item in $entries) {
-        $stateColor = switch ($item.State) {
-            'INSTALL' { 'Green' }
-            'REPLACE' { 'Yellow' }
-            default { 'DarkGray' }
-        }
-        Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
-        $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
-        Write-Host $item.Name -ForegroundColor $nameColor
-    }
-    Write-Host ''
-    Write-Host 'Only INSTALL and REPLACE files will be changed.' -ForegroundColor Gray
-    Write-Host 'Other files are retained; no old-version backups are created.' -ForegroundColor Gray
-    Write-Host ''
-    $choice = (Read-Host 'Apply these changes? [Y/N]').Trim().ToUpperInvariant()
-    if ($choice -cne 'Y') {
-        Write-Host ''
-        Write-Host 'Canceled. No files were replaced.'
-        return
-    }
-
-    # Stage every changed file beside its destination; then replace via move.
-    foreach ($item in $changes) {
-        $parentDir = Split-Path -Path $item.Target -Parent
-        if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
-            New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
-        }
-        $staged = $item.Target + '.new'
-        if (Test-Path -LiteralPath $staged) { throw "Temporary destination already exists: $staged" }
-        Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
-        $stagedFiles.Add($staged)
-        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
-            throw "SHA-256 mismatch for $staged; originals were not touched."
+    foreach ($required in @('install.ps1', 'Common\Common.ps1', 'Languages\en.psd1', 'README.md')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $required) -PathType Leaf)) {
+            throw "Invalid PSWinKit ZIP: missing $required"
         }
     }
-    foreach ($item in $changes) {
-        $staged = $item.Target + '.new'
-        Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
-        $verb = if ($item.State -eq 'INSTALL') { 'Installed' } else { 'Replaced' }
-        Write-Host "${verb}: $($item.Name)" -ForegroundColor Green
-    }
-    Write-Host ''
-    Write-Host 'Update completed.'
-} catch {
-    $failed = $true
+    $installerStarted = $true
+    & (Join-Path $sourceRoot 'install.ps1')
+}
+catch {
     Write-Host ''
     Write-Host ('UPDATE ERROR: ' + $_.Exception.Message) -ForegroundColor Red
-    Write-Host 'Some files may already have been updated; inspect the output above.' -ForegroundColor Yellow
-} finally {
-    foreach ($path in $stagedFiles) {
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
-    }
+    if (-not $installerStarted) { Wait-ForExitKey }
+    throw
+}
+finally {
     if (Test-Path -LiteralPath $tempDir) {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Wait-ForExitKey
 }
-if ($failed) { throw 'Updater failed; see the error above.' }

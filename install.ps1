@@ -1,0 +1,246 @@
+﻿#Requires -Version 5.1
+# PSWinKit installer. Run from a downloaded source tree or a local clone.
+# Installs into Get-Location; Common and translations come from this source tree.
+# Preserves the original SHA-256 / .new / move workflow; no backup copies.
+
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
+
+$target = (Get-Location).ProviderPath
+# Executed from the freshly extracted PSWinKit source tree.
+# Destination is the caller's current working directory.
+. (Join-Path $PSScriptRoot 'Common\Common.ps1')
+$utility = Start-Utility -ScriptPath $PSCommandPath
+if ($null -eq $utility) { return }
+$m = $utility.Messages
+$stagedFiles = New-Object 'System.Collections.Generic.List[string]'
+$manifest = Join-Path $target 'install.psd1'
+$manifestStage = $manifest + '.new'
+$failed = $false
+$manifestStageCreated = $false
+
+# Validate paths recorded in an old state file before they are considered for removal.
+function Test-RelativeFileName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name) -or [IO.Path]::IsPathRooted($Name)) { return $false }
+    if ($Name -match '[:*?"<>|\x00-\x1f]' -or $Name -match '(?:^|[\\/])\.{1,2}(?:[\\/]|$)') { return $false }
+    if ($Name -match '(?:^|[\\/])\.' -or $Name -match '[\\/]$') { return $false }
+    if ($Name -match '(?:^|[\\/])[^\\/]*[. ](?:[\\/]|$)') { return $false }
+    return $true
+}
+
+function Get-TargetFile {
+    param([string]$Name)
+    if (-not (Test-RelativeFileName -Name $Name)) { throw ($m.InvalidPath -f $Name) }
+    $destination = [IO.Path]::GetFullPath((Join-Path $target $Name))
+    $root = [IO.Path]::GetFullPath($target).TrimEnd('\') + '\'
+    if (-not $destination.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+        throw ($m.InvalidPath -f $Name)
+    }
+    # Disallow replacing or deleting files through junctions / symbolic links.
+    $relative = $destination.Substring($root.Length)
+    $current = $root
+    foreach ($part in ($relative -split '\\')) {
+        $current = Join-Path $current $part
+        if (Test-Path -LiteralPath $current) {
+            $attributes = (Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw ($m.LinkPath -f $current)
+            }
+        }
+    }
+    return $destination
+}
+
+try {
+    $sourceRoot = $PSScriptRoot.TrimEnd('\')
+    # Find all repository files, including nested folders; omit dot-prefixed
+    # items, this installer and the locally generated install.psd1.
+    $sourceFiles = @(
+        Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force -ErrorAction Stop |
+            Where-Object {
+                $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
+                $relative -notmatch '(?:^|[\\/])\.' -and $relative -ine 'install.ps1' -and $relative -ine 'install.psd1'
+            } |
+            Sort-Object { $_.FullName.Substring($sourceRoot.Length).TrimStart('\') }
+    )
+    if ($sourceFiles.Count -eq 0) { throw $m.NoSourceFiles }
+
+    $entries = @()
+    $changes = @()
+    $newNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourceFile in $sourceFiles) {
+        if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw ($m.SourceLink -f $sourceFile.FullName)
+        }
+        $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
+        if (-not (Test-RelativeFileName -Name $name)) { throw ($m.InvalidPath -f $name) }
+        if (-not $newNames.Add($name)) { throw ($m.DuplicatePath -f $name) }
+        $from = $sourceFile.FullName
+        $to = Get-TargetFile -Name $name
+        if (Test-Path -LiteralPath $to -PathType Container) {
+            throw ($m.TargetIsDirectory -f $to)
+        }
+        $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
+        $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
+            'INSTALL'
+        } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
+            'REPLACE'
+        } else {
+            'UNCHANGED'
+        }
+        $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
+        $entries += $entry
+        if ($state -ne 'UNCHANGED') { $changes += $entry }
+    }
+
+    # Read the old list only to find obsolete files. Missing, empty, malformed
+    # or unreadable state means no removals; it never prevents an update.
+    $oldNames = @()
+    $oldValid = $false
+    if (Test-Path -LiteralPath $manifest -PathType Leaf) {
+        try {
+            $data = Import-PowerShellDataFile -LiteralPath $manifest -ErrorAction Stop
+            $value = $data['installed-files']
+            if ($value -is [array] -and $value.Count -gt 0) {
+                $oldSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                foreach ($oldName in $value) {
+                    if (-not ($oldName -is [string]) -or -not (Test-RelativeFileName -Name $oldName) -or
+                        $oldName -ieq 'install.psd1' -or $oldName -ieq 'install.ps1' -or -not $oldSet.Add($oldName)) {
+                        throw $m.InvalidManifestEntry
+                    }
+                }
+                $oldNames = @($value)
+                $oldValid = $true
+            }
+        }
+        catch {
+            Write-Host ($m.InvalidManifest -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
+    $removals = @()
+    if ($oldValid) {
+        try {
+            foreach ($oldName in $oldNames) {
+                if ($newNames.Contains($oldName)) { continue }
+                $oldPath = Get-TargetFile -Name $oldName
+                if (Test-Path -LiteralPath $oldPath -PathType Container) {
+                    throw ($m.TargetIsDirectory -f $oldPath)
+                }
+                if (Test-Path -LiteralPath $oldPath -PathType Leaf) {
+                    $removals += [pscustomobject]@{ Name=$oldName; Target=$oldPath; State='REMOVE' }
+                }
+            }
+        }
+        catch {
+            Write-Host ($m.InvalidManifest -f $_.Exception.Message) -ForegroundColor Yellow
+            $removals = @()
+            $oldValid = $false
+            $oldNames = @()
+        }
+    }
+
+    # The state file is rewritten when missing or when its inventory changed.
+    $manifestChanged = -not $oldValid -or $oldNames.Count -ne $newNames.Count
+    if (-not $manifestChanged) {
+        foreach ($entry in $entries) {
+            if (-not $oldSet.Contains($entry.Name)) { $manifestChanged = $true; break }
+        }
+    }
+    if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
+    if ($changes.Count -eq 0 -and $removals.Count -eq 0 -and -not $manifestChanged) {
+        Write-Host $m.UpToDate -ForegroundColor Green
+        return
+    }
+
+    $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
+    $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
+    $unchangedCount = $entries.Count - $changes.Count
+    Write-Host $m.StateLegend -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host $m.SummaryTitle -ForegroundColor Cyan
+    Write-Host ($m.Destination -f $target) -ForegroundColor Gray
+    Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
+    Write-Host ''
+    foreach ($item in @($entries) + @($removals)) {
+        $stateColor = switch ($item.State) {
+            'INSTALL' { 'Green' }
+            'REPLACE' { 'Yellow' }
+            'REMOVE' { 'Red' }
+            default { 'DarkGray' }
+        }
+        Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
+        $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
+        Write-Host $item.Name -ForegroundColor $nameColor
+    }
+    Write-Host ''
+    Write-Host $m.ChangeNotice -ForegroundColor Gray
+    Write-Host $m.NoBackups -ForegroundColor Gray
+    Write-Host ''
+    $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
+    if ($choice -cne 'Y') {
+        Write-Host $m.Canceled
+        return
+    }
+
+    # Stage every changed file beside its destination; then replace via move.
+    # Nothing is removed before every staged SHA-256 has been verified.
+    foreach ($item in $changes) {
+        $parentDir = Split-Path -Path $item.Target -Parent
+        if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+        }
+        $staged = $item.Target + '.new'
+        if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
+        $stagedFiles.Add($staged)
+        Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
+            throw ($m.HashMismatch -f $staged)
+        }
+    }
+    # Replace the updater last; its running code is already loaded in memory.
+    foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +
+                     @($changes | Where-Object { $_.Name -ieq 'update.ps1' })) {
+        $staged = $item.Target + '.new'
+        Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
+        $verb = if ($item.State -eq 'INSTALL') { $m.Installed } else { $m.Replaced }
+        Write-Host ("${verb}: $($item.Name)") -ForegroundColor Green
+    }
+    foreach ($item in $removals) {
+        Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
+        Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
+    }
+
+    # A machine-written PSD1 inventory: no SHA-256, and no inventory of its own.
+    # The state file is committed last; failure leaves the previous state intact.
+    $stateLines = @('@{', "    'installed-files' = @(")
+    foreach ($entry in ($entries | Sort-Object Name)) {
+        $quoted = $entry.Name.Replace("'", "''")
+        $stateLines += "        '$quoted'"
+    }
+    $stateLines += '    )'
+    $stateLines += '}'
+    if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
+    $manifestStageCreated = $true
+    [IO.File]::WriteAllText($manifestStage, (($stateLines -join "`r`n") + "`r`n"), ([Text.UTF8Encoding]::new($true)))
+    Move-Item -LiteralPath $manifestStage -Destination $manifest -Force -ErrorAction Stop
+    Write-Host ''
+    Write-Host $m.Completed -ForegroundColor Green
+}
+catch {
+    $failed = $true
+    Write-Host ''
+    Write-Host ($m.UpdateError -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host $m.PartialWarning -ForegroundColor Yellow
+}
+finally {
+    foreach ($path in $stagedFiles) {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    }
+    if ($manifestStageCreated -and (Test-Path -LiteralPath $manifestStage -PathType Leaf)) {
+        Remove-Item -LiteralPath $manifestStage -Force -ErrorAction SilentlyContinue
+    }
+    Stop-Utility -Utility $utility
+}
+if ($failed) { throw $m.Failed }

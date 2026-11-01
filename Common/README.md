@@ -200,7 +200,7 @@ Avoid copying the full contract into root or utility README files; link to it in
 
 ## 13. Development rules
 
-Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not change an agreed deletion or repair algorithm for cosmetic refactoring. Preserve native console output from `DISM`, `SFC`, `CHKDSK` and similar tools where practical. Prefer PSD1 for configuration and localization and JSON for machine-updated state. Check and diagnose critical operations. Suggest short English **Title** and **Description** for Git commits.
+Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not change an agreed deletion or repair algorithm for cosmetic refactoring. Preserve native console output from `DISM`, `SFC`, `CHKDSK` and similar tools where practical. Use PSD1 for configuration, localization and machine-updated state. Check and diagnose critical operations. Suggest short English **Title** and **Description** for Git commits.
 
 ## 14. Contract changes
 

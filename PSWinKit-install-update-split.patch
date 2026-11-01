@@ -1,0 +1,576 @@
+diff --git a/.gitignore b/.gitignore
+index a04229c..b5a4857 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -4,3 +4,6 @@
+ *.bak
+ Thumbs.db
+ Desktop.ini
++
++# Local generated installed-files inventory
++/install.psd1
+diff --git a/Common/README.md b/Common/README.md
+index 77534f3..9587dc1 100644
+--- a/Common/README.md
++++ b/Common/README.md
+@@ -198,7 +198,7 @@ Avoid copying the full contract into root or utility README files; link to it in
+ 
+ ## 13. Development rules
+ 
+-Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not change an agreed deletion or repair algorithm for cosmetic refactoring. Preserve native console output from `DISM`, `SFC`, `CHKDSK` and similar tools where practical. Prefer PSD1 for configuration and localization and JSON for machine-updated state. Check and diagnose critical operations. Suggest short English **Title** and **Description** for Git commits.
++Prefer simple, maintainable code and built-in PowerShell 5.1 mechanisms. Do not change an agreed deletion or repair algorithm for cosmetic refactoring. Preserve native console output from `DISM`, `SFC`, `CHKDSK` and similar tools where practical. Use PSD1 for configuration, localization and machine-updated state. Check and diagnose critical operations. Suggest short English **Title** and **Description** for Git commits.
+ 
+ ## 14. Contract changes
+ 
+diff --git a/Common/README.ru.md b/Common/README.ru.md
+index 8a97585..3c3bbc8 100644
+--- a/Common/README.ru.md
++++ b/Common/README.ru.md
+@@ -198,7 +198,7 @@ finally {
+ 
+ ## 13. Общие правила разработки
+ 
+-Предпочитать простой, сопровождаемый код и штатные механизмы PowerShell 5.1. Менять согласованные алгоритмы удаления или восстановления исключительно ради косметического рефакторинга нельзя. Для `DISM`, `SFC`, `CHKDSK` и аналогичных команд по возможности сохранять штатный вывод. Для настроек и локализации использовать PSD1; для машинно изменяемого состояния предпочтителен JSON. Результаты критических операций проверять и диагностировать. Для Git-коммитов предлагать короткие **Title** и **Description** на английском.
++Предпочитать простой, сопровождаемый код и штатные механизмы PowerShell 5.1. Менять согласованные алгоритмы удаления или восстановления исключительно ради косметического рефакторинга нельзя. Для `DISM`, `SFC`, `CHKDSK` и аналогичных команд по возможности сохранять штатный вывод. Для настроек, локализации и машинно изменяемого состояния использовать PSD1. Результаты критических операций проверять и диагностировать. Для Git-коммитов предлагать короткие **Title** и **Description** на английском.
+ 
+ ## 14. Изменение контракта
+ 
+diff --git a/Languages/en.psd1 b/Languages/en.psd1
+new file mode 100644
+index 0000000..4ecc62d
+--- /dev/null
++++ b/Languages/en.psd1
+@@ -0,0 +1,29 @@
++﻿@{
++    Title = 'PSWinKit installation and update'
++    NoSourceFiles = 'No installable files found in the ZIP.'
++    InvalidPath = 'Invalid path: {0}'
++    LinkPath = 'Symbolic link or junction in destination path: {0}'
++    SourceLink = 'Unsupported symbolic link in ZIP: {0}'
++    DuplicatePath = 'Duplicate path in ZIP: {0}'
++    TargetIsDirectory = 'Destination is a directory, not a file: {0}'
++    InvalidManifest = 'Previous install.psd1 is invalid or unreadable; obsolete files will not be removed: {0}'
++    InvalidManifestEntry = 'Invalid or duplicate installed-files entry.'
++    UpToDate = 'All files are up to date.'
++    StateLegend = 'INSTALL = new; REPLACE = changed; UNCHANGED = identical SHA-256; REMOVE = obsolete.'
++    SummaryTitle = '=== INSTALL/UPDATE SUMMARY ==='
++    Destination = 'Destination: {0}'
++    ChangeCounts = 'Changes: {0} to install, {1} to replace, {2} to remove; {3} unchanged.'
++    ChangeNotice = 'Only INSTALL, REPLACE and REMOVE files will be changed.'
++    NoBackups = 'Other files are retained; no old-version backups are created.'
++    Confirm = 'Apply these changes? [Y/N]'
++    Canceled = 'Canceled. No files were changed.'
++    StageExists = 'Temporary destination already exists: {0}'
++    HashMismatch = 'SHA-256 mismatch for {0}; originals were not touched.'
++    Installed = 'Installed'
++    Replaced = 'Replaced'
++    Removed = 'Removed: {0}'
++    Completed = 'Update completed.'
++    UpdateError = 'UPDATE ERROR: {0}'
++    Failed = 'Updater failed; see the error above.'
++    PartialWarning = 'Some files may already have been updated; inspect the output above.'
++}
+diff --git a/Languages/ru.psd1 b/Languages/ru.psd1
+new file mode 100644
+index 0000000..75f5bc8
+--- /dev/null
++++ b/Languages/ru.psd1
+@@ -0,0 +1,29 @@
++﻿@{
++    Title = 'Установка и обновление PSWinKit'
++    NoSourceFiles = 'В архиве не найдены файлы для установки.'
++    InvalidPath = 'Недопустимый путь: {0}'
++    LinkPath = 'Символическая ссылка или точка соединения в пути назначения: {0}'
++    SourceLink = 'Неподдерживаемая символическая ссылка в архиве: {0}'
++    DuplicatePath = 'Повторяющийся путь в архиве: {0}'
++    TargetIsDirectory = 'Путь назначения является каталогом, а не файлом: {0}'
++    InvalidManifest = 'Предыдущий install.psd1 повреждён или недоступен; устаревшие файлы удаляться не будут: {0}'
++    InvalidManifestEntry = 'Некорректная или повторяющаяся запись в installed-files.'
++    UpToDate = 'Все файлы актуальны.'
++    StateLegend = 'INSTALL = новый; REPLACE = изменён; UNCHANGED = SHA-256 совпадает; REMOVE = устаревший.'
++    SummaryTitle = '=== УСТАНОВКА / ОБНОВЛЕНИЕ ==='
++    Destination = 'Каталог назначения: {0}'
++    ChangeCounts = 'Изменения: установить — {0}, заменить — {1}, удалить — {2}; без изменений — {3}.'
++    ChangeNotice = 'Будут изменены только файлы со статусом INSTALL, REPLACE или REMOVE.'
++    NoBackups = 'Прочие файлы сохраняются; резервные копии старых версий не создаются.'
++    Confirm = 'Применить изменения? [Y/N]'
++    Canceled = 'Отменено. Файлы не изменены.'
++    StageExists = 'Временный файл назначения уже существует: {0}'
++    HashMismatch = 'Контрольная сумма SHA-256 не совпала для {0}; исходные файлы не затронуты.'
++    Installed = 'Установлен'
++    Replaced = 'Заменён'
++    Removed = 'Удалён: {0}'
++    Completed = 'Обновление завершено.'
++    UpdateError = 'ОШИБКА ОБНОВЛЕНИЯ: {0}'
++    Failed = 'Обновление завершилось с ошибкой. Подробности выше.'
++    PartialWarning = 'Часть файлов уже могла быть обновлена; проверьте сообщения выше.'
++}
+diff --git a/README.md b/README.md
+index e5b4e0d..859496b 100644
+--- a/README.md
++++ b/README.md
+@@ -27,6 +27,20 @@ From a PowerShell console in the repository root:
+ 
+ For utility-specific instructions and safety warnings, follow the utility link above. Preserve the directory layout; each utility loads `Common/Common.ps1` by a relative path.
+ 
++## Installation and updates
++
++Download [`update.ps1`](update.ps1), open Windows PowerShell 5.1 and change to your intended installation directory. Run the downloaded script, for example:
++
++```powershell
++New-Item -ItemType Directory -Path 'C:\Tools\PSWinKit' -Force | Out-Null
++Set-Location 'C:\Tools\PSWinKit'
++& "$env:TEMP\update.ps1" # Example if downloaded to TEMP
++```
++
++The target directory is **always the current working directory** (`Get-Location`), not the updater's script folder. For later updates, use `./update.ps1` after changing to the installed directory. `update.ps1` downloads the latest ZIP and runs the fresh [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) from a temporary folder. That installer uses matching Common and localizations without requiring administrator rights (unless the destination itself requires them).
++
++Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` containing only an `installed-files` list to identify previously installed files that disappeared from the distribution. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
++
+ ## Project organization
+ 
+ - [`Common/README.md`](Common/README.md) — **full shared API documentation and the development contract**.
+diff --git a/README.ru.md b/README.ru.md
+index 06f35f3..dce30f3 100644
+--- a/README.ru.md
++++ b/README.ru.md
+@@ -27,6 +27,20 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64, где пр
+ 
+ Описание возможностей, предупреждения и ограничения приведены в README каждой утилиты. Структуру каталогов необходимо сохранять: утилиты подключают `Common/Common.ps1` по относительному пути.
+ 
++## Установка и обновление
++
++Скачайте [`update.ps1`](update.ps1), откройте Windows PowerShell 5.1 и перейдите в каталог, куда хотите установить PSWinKit. Запустите скачанный скрипт, например:
++
++```powershell
++New-Item -ItemType Directory -Path 'C:\Tools\PSWinKit' -Force | Out-Null
++Set-Location 'C:\Tools\PSWinKit'
++& "$env:TEMP\update.ps1" # Пример, если файл скачан в TEMP
++```
++
++**Каталог назначения всегда определяется по текущему рабочему каталогу** (`Get-Location`), а не по расположению скрипта. Для последующих обновлений перейдите в каталог установки и запустите `./update.ps1`. Скрипт скачивает свежий ZIP и запускает [`install.ps1`](https://github.com/avmaksimov/PSWinKit/blob/main/install.ps1) из временного каталога. Установщик использует соответствующие новые версии Common и языков, без обязательного повышения прав (если в целевой каталог разрешена запись).
++
++Перед подтверждением проверьте каталог назначения и общую сводку `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE`. Установщик сохраняет посторонние файлы, исключает из обработки компоненты путей с точкой в начале (включая служебные файлы Git) и не копирует самого себя. Локальный `install.psd1` содержит только список `installed-files`, позволяющий определить файлы прежней установки, исчезнувшие из дистрибутива. При отсутствии или повреждении файла либо списка устаревшие файлы не удаляются. Содержимое сравнивается по SHA-256; все изменения, включая удаление, подтверждаются один раз. Резервные копии старых версий и автоматический откат не предусмотрены. Не редактируйте `install.psd1` вручную.
++
+ ## Документация
+ 
+ - [`Common/README.ru.md`](Common/README.ru.md) — **полное описание общего интерфейса и обязательный контракт разработки**.
+diff --git a/install.ps1 b/install.ps1
+new file mode 100644
+index 0000000..aa8ab4d
+--- /dev/null
++++ b/install.ps1
+@@ -0,0 +1,246 @@
++﻿#Requires -Version 5.1
++# PSWinKit installer. Run from a downloaded source tree or a local clone.
++# Installs into Get-Location; Common and translations come from this source tree.
++# Preserves the original SHA-256 / .new / move workflow; no backup copies.
++
++Set-StrictMode -Version 2.0
++$ErrorActionPreference = 'Stop'
++
++$target = (Get-Location).ProviderPath
++# Executed from the freshly extracted PSWinKit source tree.
++# Destination is the caller's current working directory.
++. (Join-Path $PSScriptRoot 'Common\Common.ps1')
++$utility = Start-Utility -ScriptPath $PSCommandPath
++if ($null -eq $utility) { return }
++$m = $utility.Messages
++$stagedFiles = New-Object 'System.Collections.Generic.List[string]'
++$manifest = Join-Path $target 'install.psd1'
++$manifestStage = $manifest + '.new'
++$failed = $false
++$manifestStageCreated = $false
++
++# Validate paths recorded in an old state file before they are considered for removal.
++function Test-RelativeFileName {
++    param([string]$Name)
++    if ([string]::IsNullOrWhiteSpace($Name) -or [IO.Path]::IsPathRooted($Name)) { return $false }
++    if ($Name -match '[:*?"<>|\x00-\x1f]' -or $Name -match '(?:^|[\\/])\.{1,2}(?:[\\/]|$)') { return $false }
++    if ($Name -match '(?:^|[\\/])\.' -or $Name -match '[\\/]$') { return $false }
++    if ($Name -match '(?:^|[\\/])[^\\/]*[. ](?:[\\/]|$)') { return $false }
++    return $true
++}
++
++function Get-TargetFile {
++    param([string]$Name)
++    if (-not (Test-RelativeFileName -Name $Name)) { throw ($m.InvalidPath -f $Name) }
++    $destination = [IO.Path]::GetFullPath((Join-Path $target $Name))
++    $root = [IO.Path]::GetFullPath($target).TrimEnd('\') + '\'
++    if (-not $destination.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
++        throw ($m.InvalidPath -f $Name)
++    }
++    # Disallow replacing or deleting files through junctions / symbolic links.
++    $relative = $destination.Substring($root.Length)
++    $current = $root
++    foreach ($part in ($relative -split '\\')) {
++        $current = Join-Path $current $part
++        if (Test-Path -LiteralPath $current) {
++            $attributes = (Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes
++            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
++                throw ($m.LinkPath -f $current)
++            }
++        }
++    }
++    return $destination
++}
++
++try {
++    $sourceRoot = $PSScriptRoot.TrimEnd('\')
++    # Find all repository files, including nested folders; omit dot-prefixed
++    # items, this installer and the locally generated install.psd1.
++    $sourceFiles = @(
++        Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force -ErrorAction Stop |
++            Where-Object {
++                $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
++                $relative -notmatch '(?:^|[\\/])\.' -and $relative -ine 'install.ps1' -and $relative -ine 'install.psd1'
++            } |
++            Sort-Object { $_.FullName.Substring($sourceRoot.Length).TrimStart('\') }
++    )
++    if ($sourceFiles.Count -eq 0) { throw $m.NoSourceFiles }
++
++    $entries = @()
++    $changes = @()
++    $newNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
++    foreach ($sourceFile in $sourceFiles) {
++        if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
++            throw ($m.SourceLink -f $sourceFile.FullName)
++        }
++        $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
++        if (-not (Test-RelativeFileName -Name $name)) { throw ($m.InvalidPath -f $name) }
++        if (-not $newNames.Add($name)) { throw ($m.DuplicatePath -f $name) }
++        $from = $sourceFile.FullName
++        $to = Get-TargetFile -Name $name
++        if (Test-Path -LiteralPath $to -PathType Container) {
++            throw ($m.TargetIsDirectory -f $to)
++        }
++        $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
++        $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
++            'INSTALL'
++        } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
++            'REPLACE'
++        } else {
++            'UNCHANGED'
++        }
++        $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
++        $entries += $entry
++        if ($state -ne 'UNCHANGED') { $changes += $entry }
++    }
++
++    # Read the old list only to find obsolete files. Missing, empty, malformed
++    # or unreadable state means no removals; it never prevents an update.
++    $oldNames = @()
++    $oldValid = $false
++    if (Test-Path -LiteralPath $manifest -PathType Leaf) {
++        try {
++            $data = Import-PowerShellDataFile -LiteralPath $manifest -ErrorAction Stop
++            $value = $data['installed-files']
++            if ($value -is [array] -and $value.Count -gt 0) {
++                $oldSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
++                foreach ($oldName in $value) {
++                    if (-not ($oldName -is [string]) -or -not (Test-RelativeFileName -Name $oldName) -or
++                        $oldName -ieq 'install.psd1' -or $oldName -ieq 'install.ps1' -or -not $oldSet.Add($oldName)) {
++                        throw $m.InvalidManifestEntry
++                    }
++                }
++                $oldNames = @($value)
++                $oldValid = $true
++            }
++        }
++        catch {
++            Write-Host ($m.InvalidManifest -f $_.Exception.Message) -ForegroundColor Yellow
++        }
++    }
++
++    $removals = @()
++    if ($oldValid) {
++        try {
++            foreach ($oldName in $oldNames) {
++                if ($newNames.Contains($oldName)) { continue }
++                $oldPath = Get-TargetFile -Name $oldName
++                if (Test-Path -LiteralPath $oldPath -PathType Container) {
++                    throw ($m.TargetIsDirectory -f $oldPath)
++                }
++                if (Test-Path -LiteralPath $oldPath -PathType Leaf) {
++                    $removals += [pscustomobject]@{ Name=$oldName; Target=$oldPath; State='REMOVE' }
++                }
++            }
++        }
++        catch {
++            Write-Host ($m.InvalidManifest -f $_.Exception.Message) -ForegroundColor Yellow
++            $removals = @()
++            $oldValid = $false
++            $oldNames = @()
++        }
++    }
++
++    # The state file is rewritten when missing or when its inventory changed.
++    $manifestChanged = -not $oldValid -or $oldNames.Count -ne $newNames.Count
++    if (-not $manifestChanged) {
++        foreach ($entry in $entries) {
++            if (-not $oldSet.Contains($entry.Name)) { $manifestChanged = $true; break }
++        }
++    }
++    if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
++    if ($changes.Count -eq 0 -and $removals.Count -eq 0 -and -not $manifestChanged) {
++        Write-Host $m.UpToDate -ForegroundColor Green
++        return
++    }
++
++    $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
++    $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
++    $unchangedCount = $entries.Count - $changes.Count
++    Write-Host $m.StateLegend -ForegroundColor DarkGray
++    Write-Host ''
++    Write-Host $m.SummaryTitle -ForegroundColor Cyan
++    Write-Host ($m.Destination -f $target) -ForegroundColor Gray
++    Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
++    Write-Host ''
++    foreach ($item in @($entries) + @($removals)) {
++        $stateColor = switch ($item.State) {
++            'INSTALL' { 'Green' }
++            'REPLACE' { 'Yellow' }
++            'REMOVE' { 'Red' }
++            default { 'DarkGray' }
++        }
++        Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
++        $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
++        Write-Host $item.Name -ForegroundColor $nameColor
++    }
++    Write-Host ''
++    Write-Host $m.ChangeNotice -ForegroundColor Gray
++    Write-Host $m.NoBackups -ForegroundColor Gray
++    Write-Host ''
++    $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
++    if ($choice -cne 'Y') {
++        Write-Host $m.Canceled
++        return
++    }
++
++    # Stage every changed file beside its destination; then replace via move.
++    # Nothing is removed before every staged SHA-256 has been verified.
++    foreach ($item in $changes) {
++        $parentDir = Split-Path -Path $item.Target -Parent
++        if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
++            New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
++        }
++        $staged = $item.Target + '.new'
++        if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
++        $stagedFiles.Add($staged)
++        Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
++        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
++            throw ($m.HashMismatch -f $staged)
++        }
++    }
++    # Replace the updater last; its running code is already loaded in memory.
++    foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +
++                     @($changes | Where-Object { $_.Name -ieq 'update.ps1' })) {
++        $staged = $item.Target + '.new'
++        Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
++        $verb = if ($item.State -eq 'INSTALL') { $m.Installed } else { $m.Replaced }
++        Write-Host ("${verb}: $($item.Name)") -ForegroundColor Green
++    }
++    foreach ($item in $removals) {
++        Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
++        Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
++    }
++
++    # A machine-written PSD1 inventory: no SHA-256, and no inventory of its own.
++    # The state file is committed last; failure leaves the previous state intact.
++    $stateLines = @('@{', "    'installed-files' = @(")
++    foreach ($entry in ($entries | Sort-Object Name)) {
++        $quoted = $entry.Name.Replace("'", "''")
++        $stateLines += "        '$quoted'"
++    }
++    $stateLines += '    )'
++    $stateLines += '}'
++    if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
++    $manifestStageCreated = $true
++    [IO.File]::WriteAllText($manifestStage, (($stateLines -join "`r`n") + "`r`n"), ([Text.UTF8Encoding]::new($true)))
++    Move-Item -LiteralPath $manifestStage -Destination $manifest -Force -ErrorAction Stop
++    Write-Host ''
++    Write-Host $m.Completed -ForegroundColor Green
++}
++catch {
++    $failed = $true
++    Write-Host ''
++    Write-Host ($m.UpdateError -f $_.Exception.Message) -ForegroundColor Red
++    Write-Host $m.PartialWarning -ForegroundColor Yellow
++}
++finally {
++    foreach ($path in $stagedFiles) {
++        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
++    }
++    if ($manifestStageCreated -and (Test-Path -LiteralPath $manifestStage -PathType Leaf)) {
++        Remove-Item -LiteralPath $manifestStage -Force -ErrorAction SilentlyContinue
++    }
++    Stop-Utility -Utility $utility
++}
++if ($failed) { throw $m.Failed }
+diff --git a/update.ps1 b/update.ps1
+index 2ee5869..a8cf05d 100644
+--- a/update.ps1
++++ b/update.ps1
+@@ -1,8 +1,7 @@
+ ﻿#Requires -Version 5.1
+-# WinRepair updater, adapted from avmaksimov/WinRE-Manager/install.ps1.
+-# Downloads a GitHub source ZIP with Invoke-WebRequest, compares SHA-256,
+-# and asks for one Y/N confirmation. Existing unrelated files are preserved.
+-# No installer log files, backup copies, or command-line parameters.
++# PSWinKit bootstrap: download the current source ZIP, then run install.ps1.
++# File comparison, installation and cleanup of obsolete files are owned by install.ps1.
++# No command-line parameters, no Common dependency.
+ 
+ Set-StrictMode -Version 2.0
+ $ErrorActionPreference = 'Stop'
+@@ -30,17 +29,16 @@ function Wait-ForExitKey {
+ 
+ $script:PauseAtExit = Test-ExplorerLaunch
+ $owner = 'avmaksimov'
+-$repository = 'WinRepair'
++$repository = 'PSWinKit'
+ $branch = 'main'
+ $target = (Get-Location).ProviderPath
+ $url = "https://github.com/$owner/$repository/archive/refs/heads/$branch.zip"
+ $downloadUrl = $url + '?cacheBust=' + [guid]::NewGuid().ToString('N')
+ $noCacheHeaders = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
+-$tempDir = Join-Path $env:TEMP ('WinRepair-Update-' + [guid]::NewGuid().ToString('N'))
++$tempDir = Join-Path $env:TEMP ('PSWinKit-Update-' + [guid]::NewGuid().ToString('N'))
+ $zip = Join-Path $tempDir 'source.zip'
+ $extract = Join-Path $tempDir 'unpacked'
+-$stagedFiles = New-Object 'System.Collections.Generic.List[string]'
+-$failed = $false
++$installerStarted = $false
+ 
+ try {
+     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+@@ -54,118 +52,22 @@ try {
+     $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
+     if ($roots.Count -ne 1) { throw 'Unexpected ZIP root structure.' }
+     $sourceRoot = $roots[0].FullName.TrimEnd('\')
+-
+-    # Find all repository files, including nested folders; omit dot-prefixed items.
+-    $sourceFiles = @(
+-        Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force -ErrorAction Stop |
+-            Where-Object {
+-                $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
+-                $relative -notmatch '(?:^|[\\/])\.'
+-            } |
+-            Sort-Object { $_.FullName.Substring($sourceRoot.Length).TrimStart('\') }
+-    )
+-    if ($sourceFiles.Count -eq 0) { throw 'No installable files found in the ZIP.' }
+-
+-    $entries = @()
+-    $changes = @()
+-    $unchangedCount = 0
+-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+-    foreach ($sourceFile in $sourceFiles) {
+-        if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+-            throw "Unsupported symbolic link in ZIP: $($sourceFile.FullName)"
+-        }
+-        $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
+-        if (-not $seen.Add($name)) { throw "Duplicate path in ZIP: $name" }
+-        $from = $sourceFile.FullName
+-        $to = Join-Path $target $name
+-        if (Test-Path -LiteralPath $to -PathType Container) {
+-            throw "Destination is a directory, not a file: $to"
+-        }
+-        $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
+-        $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
+-            'INSTALL'
+-        } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
+-            'REPLACE'
+-        } else {
+-            'UNCHANGED'
+-        }
+-        $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
+-        $entries += $entry
+-        if ($state -eq 'UNCHANGED') { $unchangedCount++ }
+-        else { $changes += $entry }
+-    }
+-
+-    if ($changes.Count -eq 0) {
+-        Write-Host ''
+-        Write-Host 'All files are up to date.' -ForegroundColor Green
+-        return
+-    }
+-
+-    $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
+-    $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
+-    Write-Host ''
+-    Write-Host 'INSTALL = new; REPLACE = changed; UNCHANGED = identical SHA-256 (skipped).' -ForegroundColor DarkGray
+-    Write-Host ''
+-    Write-Host '=== INSTALL/UPDATE SUMMARY ===' -ForegroundColor Cyan
+-    Write-Host 'Destination: ' -ForegroundColor Gray -NoNewline
+-    Write-Host $target -ForegroundColor White
+-    Write-Host ("Changes: {0} to install, {1} to replace; {2} unchanged (skipped)." -f $installCount, $replaceCount, $unchangedCount) -ForegroundColor Gray
+-    Write-Host ''
+-    foreach ($item in $entries) {
+-        $stateColor = switch ($item.State) {
+-            'INSTALL' { 'Green' }
+-            'REPLACE' { 'Yellow' }
+-            default { 'DarkGray' }
++    foreach ($required in @('install.ps1', 'Common\Common.ps1', 'Languages\en.psd1', 'README.md')) {
++        if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $required) -PathType Leaf)) {
++            throw "Invalid PSWinKit ZIP: missing $required"
+         }
+-        Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
+-        $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
+-        Write-Host $item.Name -ForegroundColor $nameColor
+     }
+-    Write-Host ''
+-    Write-Host 'Only INSTALL and REPLACE files will be changed.' -ForegroundColor Gray
+-    Write-Host 'Other files are retained; no old-version backups are created.' -ForegroundColor Gray
+-    Write-Host ''
+-    $choice = (Read-Host 'Apply these changes? [Y/N]').Trim().ToUpperInvariant()
+-    if ($choice -cne 'Y') {
+-        Write-Host ''
+-        Write-Host 'Canceled. No files were replaced.'
+-        return
+-    }
+-
+-    # Stage every changed file beside its destination; then replace via move.
+-    foreach ($item in $changes) {
+-        $parentDir = Split-Path -Path $item.Target -Parent
+-        if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
+-            New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+-        }
+-        $staged = $item.Target + '.new'
+-        if (Test-Path -LiteralPath $staged) { throw "Temporary destination already exists: $staged" }
+-        Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
+-        $stagedFiles.Add($staged)
+-        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
+-            throw "SHA-256 mismatch for $staged; originals were not touched."
+-        }
+-    }
+-    foreach ($item in $changes) {
+-        $staged = $item.Target + '.new'
+-        Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
+-        $verb = if ($item.State -eq 'INSTALL') { 'Installed' } else { 'Replaced' }
+-        Write-Host "${verb}: $($item.Name)" -ForegroundColor Green
+-    }
+-    Write-Host ''
+-    Write-Host 'Update completed.'
+-} catch {
+-    $failed = $true
++    $installerStarted = $true
++    & (Join-Path $sourceRoot 'install.ps1')
++}
++catch {
+     Write-Host ''
+     Write-Host ('UPDATE ERROR: ' + $_.Exception.Message) -ForegroundColor Red
+-    Write-Host 'Some files may already have been updated; inspect the output above.' -ForegroundColor Yellow
+-} finally {
+-    foreach ($path in $stagedFiles) {
+-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+-    }
++    if (-not $installerStarted) { Wait-ForExitKey }
++    throw
++}
++finally {
+     if (Test-Path -LiteralPath $tempDir) {
+         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+     }
+-    Wait-ForExitKey
+ }
+-if ($failed) { throw 'Updater failed; see the error above.' }
