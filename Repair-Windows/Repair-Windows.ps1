@@ -18,7 +18,7 @@ $script:RepairMessages = $utility.Messages
 
 $script:DiskResult = $null
 $script:SfcResult = $null
-$script:VolumeStatus = $script:RepairMessages.NotChecked_59
+$script:VolumeStatus = $script:RepairMessages.NotChecked
 $script:VolumeNeedsAttention = $false
 $script:VolumeScheduled = $false
 $script:RestartRequested = $false
@@ -48,7 +48,7 @@ function Ask-YesNo {
         if ($answer.Length -eq 0) { return $DefaultYes }
         if (@('Д', 'ДА', 'Y', 'YES') -contains $answer) { return $true }
         if (@('Н', 'НЕТ', 'N', 'NO') -contains $answer) { return $false }
-        Write-Host $script:RepairMessages.EnterYOrN_89 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.EnterYOrN -ForegroundColor Yellow
     }
 }
 
@@ -100,8 +100,8 @@ function Find-ImagesOnDrives {
         try { $file = Find-ImageAtPath $root } catch { }
         if (($file -ne $null) -and (-not ($found -contains $file))) { $found += $file }
     }
-    Write-Host ($script:RepairMessages.CheckedDrives_141A + $(if ($checked.Count -gt 0) { $checked -join ', ' } else { $script:RepairMessages.UnableToListDrives_141B }))
-    Write-Host $script:RepairMessages.OnlySourcesInstallWim_142
+    Write-Host ($script:RepairMessages.CheckedDrives + $(if ($checked.Count -gt 0) { $checked -join ', ' } else { $script:RepairMessages.UnableToListDrives }))
+    Write-Host $script:RepairMessages.OnlySourcesInstallWim
     return $found
 }
 
@@ -111,44 +111,44 @@ function Choose-Image {
     # For other scenarios, retain the existing automatic image discovery.
     if (-not $AskForDrive) {
         Write-Host ''
-        Write-Host $script:RepairMessages.SearchingAvailableDrivesFor_152 -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.SearchingAvailableDrivesFor -ForegroundColor Cyan
         $found = @(Find-ImagesOnDrives)
         if ($found.Count -eq 1) {
-            Write-Host ($script:RepairMessages.FoundOneImage_155 + $found[0]) -ForegroundColor Green
-            Write-Host $script:RepairMessages.UsingTheDetectedImage_156
+            Write-Host ($script:RepairMessages.FoundOneImage + $found[0]) -ForegroundColor Green
+            Write-Host $script:RepairMessages.UsingTheDetectedImage
             return [string]$found[0]
         }
         if ($found.Count -gt 1) {
-            Write-Host $script:RepairMessages.MultipleImagesFound_160 -ForegroundColor Cyan
+            Write-Host $script:RepairMessages.MultipleImagesFound -ForegroundColor Cyan
             for ($i = 0; $i -lt $found.Count; $i++) {
                 Write-Host (' {0}. {1}' -f ($i + 1), $found[$i])
             }
             while ($true) {
-                $answer = (Read-Host $script:RepairMessages.ImageNumberEnterSpecify_165).Trim()
+                $answer = (Read-Host $script:RepairMessages.ImageNumberEnterSpecify).Trim()
                 if ($answer -eq '') { break }
                 $selected = 0
                 if ([int]::TryParse($answer, [ref]$selected) -and $selected -gt 0 -and $selected -le $found.Count) {
                     return [string]$found[$selected - 1]
                 }
-                Write-Host $script:RepairMessages.InvalidNumber_171 -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.InvalidNumber -ForegroundColor Yellow
             }
         } else {
-            Write-Host $script:RepairMessages.NoMountedWindowsInstallation_174 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.NoMountedWindowsInstallation -ForegroundColor Yellow
         }
     }
     Write-Host ''
-    Write-Host $script:RepairMessages.MountAWindowsInstallation_178 -ForegroundColor Cyan
-    Write-Host $script:RepairMessages.YouMayAlsoEnter_179
-    Write-Host $script:RepairMessages.EnterSkipISOBased_180
+    Write-Host $script:RepairMessages.MountAWindowsInstallation -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.YouMayAlsoEnter
+    Write-Host $script:RepairMessages.EnterSkipISOBased
     while ($true) {
-        $raw = (Read-Host $script:RepairMessages.DriveLetter_182).Trim()
+        $raw = (Read-Host $script:RepairMessages.DriveLetter).Trim()
         if ($raw.Length -eq 0) { return $null }
         try { $file = Find-ImageAtPath $raw } catch { $file = $null }
         if ($file -ne $null) {
-            Write-Host ($script:RepairMessages.FoundImage_186 + $file) -ForegroundColor Green
+            Write-Host ($script:RepairMessages.FoundImage + $file) -ForegroundColor Green
             return $file
         }
-        Write-Host $script:RepairMessages.CouldNotFindSources_189 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotFindSources -ForegroundColor Yellow
     }
 }
 
@@ -190,7 +190,7 @@ function Get-ImageDetails {
     # the "Details for image" section, never the executable banner.
     $detailsHeading = [regex]::Match($output, '(?im)^\s*Details\s+for\s+image\s*:\s*[^\r\n]*')
     if (-not $detailsHeading.Success) {
-        Write-Host $script:RepairMessages.CouldNotFindThe_231 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotFindThe -ForegroundColor Yellow
         return $null
     }
     $body = $output.Substring($detailsHeading.Index + $detailsHeading.Length)
@@ -227,13 +227,13 @@ function Get-ImageDetails {
 function Choose-ImageIndex {
     param([string]$ImagePath, [string]$OsCaption, $OsProfile, [bool]$IsServer)
     Write-Host ''
-    Write-Host ($script:RepairMessages.EditionsIn_268 + $ImagePath) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.EditionsIn + $ImagePath) -ForegroundColor Cyan
 
     $rawLines = @(& $script:DismExe /English /Get-WimInfo ("/WimFile:{0}" -f $ImagePath) 2>&1)
     $code = [int]$LASTEXITCODE
     if ($code -ne 0) {
         foreach ($line in $rawLines) { Write-Host ([string]$line) }
-        Write-Host ($script:RepairMessages.CouldNotReadImage_274 + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotReadImage + (Format-ExitCode $code)) -ForegroundColor Red
         return $null
     }
     $images = @()
@@ -248,7 +248,7 @@ function Choose-ImageIndex {
         }
     }
     if ($images.Count -eq 0) {
-        Write-Host $script:RepairMessages.CouldNotReadThe_289 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotReadThe -ForegroundColor Yellow
         foreach ($line in $rawLines) { Write-Host ([string]$line) }
         return $null
     }
@@ -260,14 +260,14 @@ function Choose-ImageIndex {
 
     Write-Host ''
     foreach ($image in $images) {
-        $mark = if ([int]$image.Index -eq $suggested) { $script:RepairMessages.NameMatches_301 } else { '' }
+        $mark = if ([int]$image.Index -eq $suggested) { $script:RepairMessages.NameMatches } else { '' }
         Write-Host (' {0,2} — {1}{2}' -f $image.Index, $image.Name, $mark)
     }
-    Write-Host ($script:RepairMessages.InstalledOS0EditionID_304 -f $OsCaption, $OsProfile.Edition)
+    Write-Host ($script:RepairMessages.InstalledOS0EditionID -f $OsCaption, $OsProfile.Edition)
 
     # Verify real WIM/ESD metadata (not only friendly name). Skip questions only if
     # Edition, Architecture, InstallationType and default language all match uniquely.
-    Write-Host $script:RepairMessages.CheckingEditionWindowsVersion_308 -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.CheckingEditionWindowsVersion -ForegroundColor Cyan
     $verified = @()
     $candidate = @()
     foreach ($image in $images) {
@@ -287,7 +287,7 @@ function Choose-ImageIndex {
         }
     }
     if ($verified.Count -eq 1) {
-        Write-Host ($script:RepairMessages.Index0SelectedAutomatically_328 -f $verified[0]) -ForegroundColor Green
+        Write-Host ($script:RepairMessages.Index0SelectedAutomatically -f $verified[0]) -ForegroundColor Green
         return [int]$verified[0]
     }
     # If language information is absent or different, do not assume 100% compatibility.
@@ -297,16 +297,16 @@ function Choose-ImageIndex {
     if ($candidate.Count -ne 1) { $suggested = 0 }
 
     if ($suggested -gt 0) {
-        Write-Host ($script:RepairMessages.SuggestedIndex0Press_338 -f $suggested) -ForegroundColor Cyan
-        Write-Host $script:RepairMessages.AutomaticSelectionSkippedNot_339 -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.SuggestedIndex0Press -f $suggested) -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.AutomaticSelectionSkippedNot -ForegroundColor Yellow
     } else {
-        Write-Host $script:RepairMessages.NoUnambiguousMatchSelect_341 -ForegroundColor Yellow
-        if ($IsServer) { Write-Host $script:RepairMessages.OnServersDistinguishCarefully_342 -ForegroundColor Yellow }
+        Write-Host $script:RepairMessages.NoUnambiguousMatchSelect -ForegroundColor Yellow
+        if ($IsServer) { Write-Host $script:RepairMessages.OnServersDistinguishCarefully -ForegroundColor Yellow }
     }
-    Write-Host $script:RepairMessages.TheSourceMustMatch_344 -ForegroundColor Yellow
+    Write-Host $script:RepairMessages.TheSourceMustMatch -ForegroundColor Yellow
 
     while ($true) {
-        $question = if ($suggested -gt 0) { $script:RepairMessages.ImageIndexEnterSuggested_347A } else { $script:RepairMessages.ImageIndexEnterCancel_347B }
+        $question = if ($suggested -gt 0) { $script:RepairMessages.ImageIndexEnterSuggested } else { $script:RepairMessages.ImageIndexEnterCancel }
         $raw = (Read-Host $question).Trim()
         if ($raw.Length -eq 0) {
             if ($suggested -gt 0) { return $suggested }
@@ -318,7 +318,7 @@ function Choose-ImageIndex {
                 if ([int]$image.Index -eq $index) { return $index }
             }
         }
-        Write-Host $script:RepairMessages.TheIndexIsNot_359 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheIndexIsNot -ForegroundColor Yellow
     }
 }
 
@@ -333,7 +333,7 @@ function Invoke-RepairExecutable {
         $process.StartInfo.Arguments = $Arguments
         $process.StartInfo.UseShellExecute = $false
         $process.StartInfo.CreateNoWindow = $false
-        if (-not $process.Start()) { throw ($script:RepairMessages.FailedToStart_374 + $Executable) }
+        if (-not $process.Start()) { throw ($script:RepairMessages.FailedToStart + $Executable) }
         while (-not $process.WaitForExit(400)) { }
         $process.Refresh()
         return [int]$process.ExitCode
@@ -359,10 +359,10 @@ function Run-Dism {
         $argList += ('/Source:{0}:"{1}":{2}' -f $kind, $ImagePath, $ImageIndex)
         # Always permit the Windows Update fallback: do not add /LimitAccess.
         # Actual Microsoft Update access still depends on local policies/network.
-        Write-Host ($script:RepairMessages.NDISMUsingSource0_400 -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
-        Write-Host $script:RepairMessages.WindowsUpdateFallbackIs_401
+        Write-Host ($script:RepairMessages.NDISMUsingSource0 -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.WindowsUpdateFallbackIs
     } else {
-        Write-Host $script:RepairMessages.NDISMUsingTheDefault_403 -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.NDISMUsingTheDefault -ForegroundColor Cyan
     }
 
     # Do not catch cancellation and turn it into an ordinary DISM error.
@@ -372,15 +372,15 @@ function Run-Dism {
     $color = if (($code -eq 0) -or ($code -eq 3010)) { 'Green' } else { 'Red' }
     Write-Host ('DISM: ' + (Format-ExitCode $code)) -ForegroundColor $color
     if ($code -eq -2146498283) {
-        Write-Host $script:RepairMessages.Error0x800F0915InspectCBS_413 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.Error0x800F0915InspectCBS -ForegroundColor Yellow
     }
     if (($code -ne 0) -and ($code -ne 3010) -and (-not [string]::IsNullOrEmpty($ImagePath))) {
-        Write-Host $script:RepairMessages.RepairUsingTheISO_416 -ForegroundColor Yellow
-        Write-Host $script:RepairMessages.SomeRequiredFileVersions_417 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RepairUsingTheISO -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.SomeRequiredFileVersions -ForegroundColor Yellow
         if ($code -eq -2146498283) {
-            Write-Host $script:RepairMessages.TheRepairSourceDid_419 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.TheRepairSourceDid -ForegroundColor Yellow
         } else {
-            Write-Host $script:RepairMessages.CheckCBSLogAnd_421 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.CheckCBSLogAnd -ForegroundColor Yellow
         }
     }
     return $code
@@ -390,8 +390,8 @@ function Run-Dism {
 # Schedule an offline repair only with the user's explicit approval.
 function Schedule-SystemVolumeCheck {
     param([string]$Drive)
-    if (-not (Ask-YesNo ($script:RepairMessages.ScheduleARepairOf_431 -f $Drive) $true)) {
-        Write-Host $script:RepairMessages.StartupTimeCheckingWas_432 -ForegroundColor Yellow
+    if (-not (Ask-YesNo ($script:RepairMessages.ScheduleARepairOf -f $Drive) $true)) {
+        Write-Host $script:RepairMessages.StartupTimeCheckingWas -ForegroundColor Yellow
         return
     }
     $code = Invoke-RepairExecutable -Executable $script:ChkntfsExe -Arguments ('/c ' + $Drive)
@@ -399,9 +399,9 @@ function Schedule-SystemVolumeCheck {
         $script:VolumeScheduled = $true
         $script:VolumeNeedsAttention = $true
         $script:VolumeStatus = 'ScheduledAtBoot'
-        Write-Host $script:RepairMessages.RepairScheduledForThe_440 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RepairScheduledForThe -ForegroundColor Yellow
     } else {
-        Write-Host ($script:RepairMessages.ChkntfsError_442 + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.ChkntfsError + (Format-ExitCode $code)) -ForegroundColor Red
     }
 }
 
@@ -414,7 +414,7 @@ function Invoke-RepairVolume {
         [ValidateSet('Scan', 'SpotFix', 'OfflineScanAndFix')][string]$Mode
     )
     $name = [string]$DriveLetter
-    if ($name -notmatch '^[A-Za-z]$') { throw $script:RepairMessages.InvalidVolumeDriveLetter_455 }
+    if ($name -notmatch '^[A-Za-z]$') { throw $script:RepairMessages.InvalidVolumeDriveLetter }
     $command = ('Repair-Volume -DriveLetter {0} -{1} -ErrorAction Stop' -f $name, $Mode)
     if ($Mode -ne 'Scan') { $command += ' -Confirm:$false' }
     & ([scriptblock]::Create($command))
@@ -426,77 +426,77 @@ function Test-SystemVolume {
     if ($drive -notmatch '^[A-Za-z]:$') {
         $script:VolumeStatus = 'UnknownSystemDrive'
         $script:VolumeNeedsAttention = $true
-        Write-Host ($script:RepairMessages.CouldNotDetermineThe_467 + $drive) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotDetermineThe + $drive) -ForegroundColor Red
         return
     }
     $letter = [char]$drive.Substring(0, 1)
-    Write-Host ($script:RepairMessages.NCheckingFileSystemOn_471 -f $drive) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.NCheckingFileSystemOn -f $drive) -ForegroundColor Cyan
     if ($OsVersion -ge [version]'6.2') {
         $cmdlet = Get-Command Repair-Volume -ErrorAction SilentlyContinue
         if ($null -ne $cmdlet) {
             try {
                 $scan = @(Invoke-RepairVolume -DriveLetter $letter -Mode Scan)
-                if ($scan.Count -ne 1) { throw $script:RepairMessages.RepairVolumeReturnedAn_477 }
+                if ($scan.Count -ne 1) { throw $script:RepairMessages.RepairVolumeReturnedAn }
                 $status = ([string]$scan[0]).Trim()
                 $script:VolumeStatus = $status
                 Write-Host ('Repair-Volume -Scan: ' + $status)
                 if ($status -eq 'NoErrorsFound') {
-                    Write-Host $script:RepairMessages.TheFileSystemIs_482 -ForegroundColor Green
+                    Write-Host $script:RepairMessages.TheFileSystemIs -ForegroundColor Green
                     return
                 }
                 if (@('SpotFixNeeded', 'OfflineScanAndFixNeeded', 'ScanNeeded') -contains $status) {
                     $script:VolumeNeedsAttention = $true
-                    Write-Host ($script:RepairMessages.TheVolumeNeedsRepair_487 + $status) -ForegroundColor Yellow
+                    Write-Host ($script:RepairMessages.TheVolumeNeedsRepair + $status) -ForegroundColor Yellow
                     $spot = ($status -eq 'SpotFixNeeded')
                     $mode = if ($spot) { 'SpotFix' } else { 'OfflineScanAndFix' }
-                    if (Ask-YesNo ($script:RepairMessages.TryRepairVolume0_490 -f $mode, $drive) $true) {
+                    if (Ask-YesNo ($script:RepairMessages.TryRepairVolume0 -f $mode, $drive) $true) {
                         try {
                             if ($spot) {
                                 $fix = @(Invoke-RepairVolume -DriveLetter $letter -Mode SpotFix)
                             } else {
                                 $fix = @(Invoke-RepairVolume -DriveLetter $letter -Mode OfflineScanAndFix)
                             }
-                            Write-Host ($script:RepairMessages.RepairResult_497 + ($fix -join ', '))
+                            Write-Host ($script:RepairMessages.RepairResult + ($fix -join ', '))
                             $verify = @(Invoke-RepairVolume -DriveLetter $letter -Mode Scan)
                             if (($verify.Count -eq 1) -and (([string]$verify[0]).Trim() -eq 'NoErrorsFound')) {
                                 $script:VolumeNeedsAttention = $false
                                 $script:VolumeStatus = 'Repaired'
-                                Write-Host $script:RepairMessages.VerificationNoErrorsFound_502 -ForegroundColor Green
+                                Write-Host $script:RepairMessages.VerificationNoErrorsFound -ForegroundColor Green
                                 return
                             }
-                            Write-Host ($script:RepairMessages.FurtherCheckingIsStill_505 + ($verify -join ', ')) -ForegroundColor Yellow
+                            Write-Host ($script:RepairMessages.FurtherCheckingIsStill + ($verify -join ', ')) -ForegroundColor Yellow
                         } catch [System.Management.Automation.PipelineStoppedException] {
                             throw
                         } catch {
-                            Write-Host ($script:RepairMessages.OnlineRepairDidNot_509 + $_.Exception.Message) -ForegroundColor Yellow
+                            Write-Host ($script:RepairMessages.OnlineRepairDidNot + $_.Exception.Message) -ForegroundColor Yellow
                         }
                     }
                     Schedule-SystemVolumeCheck -Drive $drive
                     return
                 }
-                Write-Host $script:RepairMessages.UnknownRepairVolumeStatus_515 -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.UnknownRepairVolumeStatus -ForegroundColor Yellow
             } catch [System.Management.Automation.PipelineStoppedException] {
                 throw
             } catch {
-                Write-Host ($script:RepairMessages.CouldNotCheckThe_519 + $_.Exception.Message) -ForegroundColor Yellow
-                Write-Host $script:RepairMessages.SwitchingToReadOnly_520 -ForegroundColor Yellow
+                Write-Host ($script:RepairMessages.CouldNotCheckThe + $_.Exception.Message) -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.SwitchingToReadOnly -ForegroundColor Yellow
             }
         } else {
-            Write-Host $script:RepairMessages.RepairVolumeIsUnavailable_523 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.RepairVolumeIsUnavailable -ForegroundColor Yellow
         }
     } else {
-        Write-Host $script:RepairMessages.Windows7Server2008_526 -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.Windows7Server2008 -ForegroundColor Cyan
     }
     # Read-only fallback: neither /f nor /r is used automatically.
     $code = Invoke-RepairExecutable -Executable $script:ChkdskExe -Arguments $drive
     $script:VolumeStatus = ('CHKDSK ' + (Format-ExitCode $code))
     if ($code -eq 0) {
-        Write-Host $script:RepairMessages.CHKDSKNoErrorsFound_532 -ForegroundColor Green
+        Write-Host $script:RepairMessages.CHKDSKNoErrorsFound -ForegroundColor Green
         return
     }
     $script:VolumeNeedsAttention = $true
     Write-Host ('CHKDSK: ' + (Format-ExitCode $code)) -ForegroundColor Yellow
-    Write-Host $script:RepairMessages.TheFileSystemMay_537
+    Write-Host $script:RepairMessages.TheFileSystemMay
     Schedule-SystemVolumeCheck -Drive $drive
 }
 
@@ -508,67 +508,67 @@ function Offer-InPlaceWindowsSetup {
     param([string]$OsCaption, $OsProfile, [bool]$IsServer, [version]$OsVersion)
 
     if ($IsServer -or ($OsVersion -lt [version]'10.0')) {
-        Write-Host $script:RepairMessages.AutomaticSetupLaunchIs_549 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.AutomaticSetupLaunchIs -ForegroundColor Yellow
         return
     }
     $image = [string]$script:SelectedRepairImage
     if ([string]::IsNullOrEmpty($image)) {
-        Write-Host $script:RepairMessages.NoInstallationISOWas_554 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.NoInstallationISOWas -ForegroundColor Yellow
         return
     }
     # Require an image in the standard sources folder and setup.exe on the
     # very same media; a random .wim/.esd cannot safely identify its installer.
     $match = [regex]::Match($image, '(?i)^([A-Z]:)\\sources\\install\.(?:wim|esd)$')
     if (-not $match.Success) {
-        Write-Host $script:RepairMessages.TheWIMESDSource_561 -ForegroundColor Yellow
-        Write-Host $script:RepairMessages.RunSetupExeManually_562 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheWIMESDSource -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RunSetupExeManually -ForegroundColor Yellow
         return
     }
     $setup = Join-Path ($match.Groups[1].Value + '\') 'setup.exe'
     if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
-        Write-Host ($script:RepairMessages.InstallerNotFoundOn_567 + $setup) -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.InstallerNotFoundOn + $setup) -ForegroundColor Yellow
         return
     }
     $index = [int]$script:SelectedRepairIndex
     if ($index -le 0) {
-        Write-Host $script:RepairMessages.NoImageIndexWas_572 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.NoImageIndexWas -ForegroundColor Yellow
         return
     }
     # Re-read metadata for exactly the index being passed to setup.exe.
     # Do not rely on the earlier DISM choice if media content has changed.
     $details = Get-ImageDetails -ImagePath $image -ImageIndex $index
     if ($null -eq $details) {
-        Write-Host $script:RepairMessages.CouldNotVerifyInstallation_579 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotVerifyInstallation -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Edition -eq '') -or ($details.Edition -ieq '') -or
         ($details.Edition -ine $OsProfile.Edition)) {
-        Write-Host ($script:RepairMessages.ISOEditionNotVerified_584 -f $OsProfile.Edition, $script:SelectedRepairIndex, $details.Edition) -ForegroundColor Yellow
-        Write-Host $script:RepairMessages.AutomaticSetupLaunchCanceled_585 -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.ISOEditionNotVerified -f $OsProfile.Edition, $script:SelectedRepairIndex, $details.Edition) -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.SetupCanceledUnverifiedEdition -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Architecture -eq '') -or ($details.Architecture -eq '') -or
         ($details.Architecture -ine $OsProfile.Architecture) -or
         ($details.Installation -ine 'Client')) {
-        Write-Host $script:RepairMessages.TheISOArchitectureOr_591 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.TheISOArchitectureOr -ForegroundColor Yellow
         return
     }
     if (($OsProfile.Language -eq '') -or ($details.Language -eq '') -or
         ($details.Language -ine $OsProfile.Language)) {
-        Write-Host ($script:RepairMessages.LanguageMismatchOrUnknown_596 -f $OsProfile.Language, $details.Language) -ForegroundColor Yellow
-        Write-Host $script:RepairMessages.ToKeepAppsThe_597 -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.LanguageMismatchOrUnknown -f $OsProfile.Language, $details.Language) -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.ToKeepAppsThe -ForegroundColor Yellow
         return
     }
     try {
         $installed = [version]$OsProfile.Version
         $target = [version]$details.Version
         if ($target -lt $installed) {
-            Write-Host ($script:RepairMessages.TheISOContainsAn_604 -f $target, $installed) -ForegroundColor Yellow
-            Write-Host $script:RepairMessages.AutomaticSetupLaunchCanceled_605 -ForegroundColor Yellow
+            Write-Host ($script:RepairMessages.TheISOContainsAn -f $target, $installed) -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.SetupCanceledDowngrade -ForegroundColor Yellow
             return
         }
     } catch {
-        Write-Host $script:RepairMessages.CouldNotReliablyCompare_609 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.CouldNotReliablyCompare -ForegroundColor Yellow
         return
     }
 
@@ -582,39 +582,39 @@ function Offer-InPlaceWindowsSetup {
     if (($details.ServicePackBuild -ne '') -and ($details.ServicePackBuild -ne '0')) {
         $targetVersion += '.' + $details.ServicePackBuild
     }
-    Write-Host $script:RepairMessages.EDITIONCOMPARISON_623 -ForegroundColor Cyan
-    Write-Host $script:RepairMessages.CurrentWindows_624 -ForegroundColor Cyan
-    Write-Host ($script:RepairMessages.Name0_625 -f $OsCaption)
-    Write-Host ($script:RepairMessages.Edition0_626 -f $OsProfile.Edition)
-    Write-Host ($script:RepairMessages.Version0_627 -f $OsProfile.Version)
-    Write-Host ($script:RepairMessages.Architecture0_628 -f $OsProfile.Architecture)
-    Write-Host ($script:RepairMessages.Language0_629 -f $OsProfile.Language)
-    Write-Host ($script:RepairMessages.ISOImageIndex0_630 -f $index) -ForegroundColor Cyan
-    Write-Host ($script:RepairMessages.Name0_631 -f $details.Name)
-    Write-Host ($script:RepairMessages.Edition0_632 -f $details.Edition)
-    Write-Host ($script:RepairMessages.Version0_633 -f $targetVersion)
-    Write-Host ($script:RepairMessages.Architecture0_634 -f $details.Architecture)
-    Write-Host ($script:RepairMessages.Language0_635 -f $details.Language)
-    Write-Host ($script:RepairMessages.Installer0_636 -f $setup)
-    Write-Host $script:RepairMessages.EditionArchitectureAndLanguage_637 -ForegroundColor Green
-    Write-Host $script:RepairMessages.CarefullyReviewBothEditions_638 -ForegroundColor Yellow
+    Write-Host $script:RepairMessages.EDITIONCOMPARISON -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.CurrentWindows -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.InstalledWindowsName -f $OsCaption)
+    Write-Host ($script:RepairMessages.InstalledWindowsEdition -f $OsProfile.Edition)
+    Write-Host ($script:RepairMessages.InstalledWindowsVersion -f $OsProfile.Version)
+    Write-Host ($script:RepairMessages.InstalledWindowsArchitecture -f $OsProfile.Architecture)
+    Write-Host ($script:RepairMessages.InstalledWindowsLanguage -f $OsProfile.Language)
+    Write-Host ($script:RepairMessages.ISOImageIndex0 -f $index) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.IsoImageName -f $details.Name)
+    Write-Host ($script:RepairMessages.IsoImageEdition -f $details.Edition)
+    Write-Host ($script:RepairMessages.IsoImageVersion -f $targetVersion)
+    Write-Host ($script:RepairMessages.IsoImageArchitecture -f $details.Architecture)
+    Write-Host ($script:RepairMessages.IsoImageLanguage -f $details.Language)
+    Write-Host ($script:RepairMessages.Installer0 -f $setup)
+    Write-Host $script:RepairMessages.EditionArchitectureAndLanguage -ForegroundColor Green
+    Write-Host $script:RepairMessages.CarefullyReviewBothEditions -ForegroundColor Yellow
     Write-Host ''
-    if (-not (Ask-YesNo ($script:RepairMessages.StartAnInPlace_640 -f $args) $true)) {
-        Write-Host $script:RepairMessages.InstallationCanceledByThe_641
+    if (-not (Ask-YesNo ($script:RepairMessages.StartAnInPlace -f $args) $true)) {
+        Write-Host $script:RepairMessages.InstallationCanceledByThe
         return
     }
     try {
         # Windows Setup runs independently. The console remains open at script
         # exit only when the original launch was from Explorer.
         $process = Start-Process -FilePath $setup -ArgumentList $args -PassThru -ErrorAction Stop
-        if ($null -eq $process) { throw $script:RepairMessages.StartProcessDidNot_648 }
+        if ($null -eq $process) { throw $script:RepairMessages.StartProcessDidNot }
         $script:SetupLaunched = $true
-        Write-Host ($script:RepairMessages.WindowsSetupStartedPID_650 -f $process.Id) -ForegroundColor Green
+        Write-Host ($script:RepairMessages.WindowsSetupStartedPID -f $process.Id) -ForegroundColor Green
     } catch [System.Management.Automation.PipelineStoppedException] {
         throw
     } catch {
         $script:HadError = $true
-        Write-Host ($script:RepairMessages.CouldNotStartWindows_655 + $_.Exception.Message) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotStartWindows + $_.Exception.Message) -ForegroundColor Red
     }
 }
 
@@ -638,10 +638,10 @@ function Try-RepairFromImage {
         if (($details.ServicePackBuild -ne '') -and ($details.ServicePackBuild -ne '0')) {
             $displayVersion += ('.' + $details.ServicePackBuild)
         }
-        Write-Host ($script:RepairMessages.WindowsVersion0ISO_679 -f $OsProfile.Version, $displayVersion)
+        Write-Host ($script:RepairMessages.WindowsVersion0ISO -f $OsProfile.Version, $displayVersion)
         if (($OsProfile.Version -ne '') -and ($details.Version -ine $OsProfile.Version)) {
-            Write-Host $script:RepairMessages.VersionsDifferTheImage_681 -ForegroundColor Yellow
-            Write-Host $script:RepairMessages.DISMRestoreHealthNeedsThe_682 -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.VersionsDifferTheImage -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.DISMRestoreHealthNeedsThe -ForegroundColor Yellow
         }
     }
     return (Run-Dism -ImagePath $image -ImageIndex $index)
@@ -654,9 +654,9 @@ try {
         $script:LogPath = Join-Path $folder ('WinRepair_{0}.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
         Start-Transcript -Path $script:LogPath -ErrorAction Stop | Out-Null
         $script:TranscriptOn = $true
-        Write-Host ($script:RepairMessages.RepairWindowsLog_735 + $script:LogPath)
+        Write-Host ($script:RepairMessages.RepairWindowsLogStarted + $script:LogPath)
     } catch {
-        Write-Host ($script:RepairMessages.CouldNotStartThe_737 + $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host ($script:RepairMessages.CouldNotStartThe + $_.Exception.Message) -ForegroundColor Yellow
     }
 
     $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
@@ -667,38 +667,38 @@ try {
     try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
     $profile = Get-OsImageProfile -OperatingSystem $os -Edition $edition -IsServer $isServer
 
-    Write-Host ($script:RepairMessages.OS0Version1_750 -f $os.Caption, $os.Version)
-    Write-Host ($script:RepairMessages.Edition0Type1_751 -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
-    Write-Host $script:RepairMessages.TheScriptDoesNot_753
-    Write-Host $script:RepairMessages.CtrlCCancelAll_754 -ForegroundColor Yellow
+    Write-Host ($script:RepairMessages.OS0Version1 -f $os.Caption, $os.Version)
+    Write-Host ($script:RepairMessages.Edition0Type1 -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
+    Write-Host $script:RepairMessages.TheScriptDoesNot
+    Write-Host $script:RepairMessages.CtrlCCancelAll -ForegroundColor Yellow
 
     Test-SystemVolume -OsVersion $version
     $skipWindowsRepair = $script:VolumeScheduled
     if ($script:VolumeNeedsAttention -and (-not $skipWindowsRepair)) {
-        Write-Host $script:RepairMessages.FileSystemIntegrityCould_759 -ForegroundColor Yellow
-        if (-not (Ask-YesNo $script:RepairMessages.ContinueWithDISMSFC_760 $false)) {
+        Write-Host $script:RepairMessages.FileSystemIntegrityCould -ForegroundColor Yellow
+        if (-not (Ask-YesNo $script:RepairMessages.ContinueWithDISMSFC $false)) {
             $skipWindowsRepair = $true
         }
     }
     if ($skipWindowsRepair) {
-        Write-Host $script:RepairMessages.DISMAndSFCSkipped_765 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.DISMAndSFCSkipped -ForegroundColor Yellow
     } else {
         if (-not $canRestoreHealth) {
             Write-Host ''
-            Write-Host $script:RepairMessages.DISMRestoreHealthIsNot_769 -ForegroundColor Yellow
-            Write-Host $script:RepairMessages.OnlySFCWillRun_770
+            Write-Host $script:RepairMessages.DISMRestoreHealthIsNot -ForegroundColor Yellow
+            Write-Host $script:RepairMessages.OnlySFCWillRun
             Write-Host 'https://www.catalog.update.microsoft.com/Search.aspx?q=KB947821'
         } else {
             if ($isServer) {
                 Write-Host ''
-                Write-Host $script:RepairMessages.WindowsServerSpecifyAn_775 -ForegroundColor Yellow
+                Write-Host $script:RepairMessages.WindowsServerSpecifyAn -ForegroundColor Yellow
                 $script:DiskResult = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer
                 if ($null -eq $script:DiskResult) {
-                    Write-Host $script:RepairMessages.NoSourceSelectedRunning_778
+                    Write-Host $script:RepairMessages.NoSourceSelectedRunning
                     $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
                 }
             } else {
-                Write-Host $script:RepairMessages.NWindowsClientTryingDISM_782 -ForegroundColor Cyan
+                Write-Host $script:RepairMessages.NWindowsClientTryingDISM -ForegroundColor Cyan
                 $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
             }
             if (($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
@@ -706,59 +706,59 @@ try {
                     # The first attempt used the built-in/default source.
                     # A mounted ISO can now be entered without an extra Y/N prompt.
                     Write-Host ''
-                    Write-Host $script:RepairMessages.DISMCouldNotRepair_790 -ForegroundColor Yellow
+                    Write-Host $script:RepairMessages.DISMCouldNotRepair -ForegroundColor Yellow
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer
                     if ($null -ne $ret) { $script:DiskResult = $ret }
-                    else { Write-Host $script:RepairMessages.NoRepairSourceSelected_793 -ForegroundColor Yellow }
-                } elseif (Ask-YesNo $script:RepairMessages.RepairWithTheSelected_794 $true) {
+                    else { Write-Host $script:RepairMessages.NoRepairSourceSelected -ForegroundColor Yellow }
+                } elseif (Ask-YesNo $script:RepairMessages.RepairWithTheSelected $true) {
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -AskForDrive
                     if ($null -ne $ret) { $script:DiskResult = $ret }
-                    else { Write-Host $script:RepairMessages.RetryUsingISOCanceled_797 -ForegroundColor Yellow }
+                    else { Write-Host $script:RepairMessages.RetryUsingISOCanceled -ForegroundColor Yellow }
                 }
             }
         }
 
         # SFC must NOT be in finally: Ctrl+C must not launch the next repair operation.
-        Write-Host $script:RepairMessages.NCheckingSystemFilesSFC_803 -ForegroundColor Cyan
+        Write-Host $script:RepairMessages.NCheckingSystemFilesSFC -ForegroundColor Cyan
         $script:SfcResult = Invoke-RepairExecutable -Executable $script:SfcExe -Arguments '/scannow'
     }
     Write-Host ''
-    Write-Host $script:RepairMessages.SUMMARY_807 -ForegroundColor Cyan
-    Write-Host ($script:RepairMessages.SystemVolume_808 + $script:VolumeStatus)
-    if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup_809 -ForegroundColor Yellow }
+    Write-Host $script:RepairMessages.SUMMARY -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.SystemVolume + $script:VolumeStatus)
+    if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup -ForegroundColor Yellow }
     if ($null -ne $script:DiskResult) {
         Write-Host ('DISM: ' + (Format-ExitCode $script:DiskResult))
     } else {
-        Write-Host $script:RepairMessages.DISMNotRunOr_813
+        Write-Host $script:RepairMessages.DISMNotRunOr
     }
     if ($null -ne $script:SfcResult) {
         Write-Host ('SFC:  ' + (Format-ExitCode $script:SfcResult))
     } else {
-        Write-Host $script:RepairMessages.SFCNotRun_818
+        Write-Host $script:RepairMessages.SFCNotRun
     }
-    Write-Host $script:RepairMessages.AlsoEvaluateTheSFC_820
-    Write-Host ($script:RepairMessages.DISMLog_821 + (Join-Path $env:SystemRoot 'Logs\DISM\dism.log'))
-    Write-Host ($script:RepairMessages.CBSLog_822 + (Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'))
+    Write-Host $script:RepairMessages.AlsoEvaluateTheSFC
+    Write-Host ($script:RepairMessages.DISMLog + (Join-Path $env:SystemRoot 'Logs\DISM\dism.log'))
+    Write-Host ($script:RepairMessages.CBSLog + (Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'))
     if ($script:LogPath -ne $null -and $script:TranscriptOn) {
-        Write-Host ($script:RepairMessages.RepairWindowsLog_824 + $script:LogPath)
+        Write-Host ($script:RepairMessages.RepairWindowsLogSummary + $script:LogPath)
     }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
-        Write-Host $script:RepairMessages.DISMDidNotRepair_827 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.DISMDidNotRepair -ForegroundColor Yellow
         Write-Host ''
-        Write-Host $script:RepairMessages.IfDISMISORepair_829 -ForegroundColor Yellow
-        Write-Host $script:RepairMessages.ConsiderInstallingACompatible_830
-        Write-Host $script:RepairMessages.MountAnISOFrom_831
-        Write-Host $script:RepairMessages.SelectKeepPersonalFiles_832
-        Write-Host $script:RepairMessages.IfThatOptionIs_833
-        Write-Host $script:RepairMessages.BackUpImportantData_834
+        Write-Host $script:RepairMessages.IfDISMISORepair -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.ConsiderInstallingACompatible
+        Write-Host $script:RepairMessages.MountAnISOFrom
+        Write-Host $script:RepairMessages.SelectKeepPersonalFiles
+        Write-Host $script:RepairMessages.IfThatOptionIs
+        Write-Host $script:RepairMessages.BackUpImportantData
         $script:HadError = $true
     }
     if (($null -ne $script:SfcResult) -and ($script:SfcResult -ne 0)) { $script:HadError = $true }
     if ($script:VolumeNeedsAttention) { $script:HadError = $true }
-    if ($script:DiskResult -eq 3010) { Write-Host $script:RepairMessages.DISMReportedThatA_839 -ForegroundColor Yellow }
+    if ($script:DiskResult -eq 3010) { Write-Host $script:RepairMessages.DISMReportedThatA -ForegroundColor Yellow }
 
     Write-Host ''
-    Write-Host $script:RepairMessages.ToViewTheResult_842 -ForegroundColor Cyan
+    Write-Host $script:RepairMessages.ToViewTheResult -ForegroundColor Cyan
     if ($script:LogPath -ne $null -and (Test-Path -LiteralPath $script:LogPath)) {
         # Quoting with doubled apostrophes keeps the command copyable even
         # when the log directory contains apostrophes.
@@ -768,7 +768,7 @@ try {
         Write-Host 'Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content | Select-Object -Last 80'
     }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
-        Write-Host $script:RepairMessages.RecentCharacteristicCBSErrors_852 -ForegroundColor Yellow
+        Write-Host $script:RepairMessages.RecentCharacteristicCBSErrors -ForegroundColor Yellow
         Write-Host 'Select-String -Path "$env:windir\Logs\CBS\CBS.log" -Pattern "CSI Payload Corrupt","CBS_E_","Missing replacement","Failed to resolve","0x800f" | Select-Object -Last 30'
     }
     Write-Host '=================================================='
@@ -777,8 +777,8 @@ try {
         Offer-InPlaceWindowsSetup -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -OsVersion $version
     }
     if ($script:VolumeScheduled) {
-        Write-Host $script:RepairMessages.SaveYourFilesBefore_861
-        $script:RestartRequested = Ask-YesNo $script:RepairMessages.RestartTheComputerNow_862 $false
+        Write-Host $script:RepairMessages.SaveYourFilesBefore
+        $script:RestartRequested = Ask-YesNo $script:RepairMessages.RestartTheComputerNow $false
     }
     if ($script:RestartRequested) {
         try {
@@ -787,13 +787,13 @@ try {
         } catch [System.Management.Automation.PipelineStoppedException] {
             throw
         } catch {
-            Write-Host ($script:RepairMessages.CouldNotRestartThe_871 + $_.Exception.Message) -ForegroundColor Red
+            Write-Host ($script:RepairMessages.CouldNotRestartThe + $_.Exception.Message) -ForegroundColor Red
             $script:HadError = $true
         }
     }
 } catch {
     # All unexpected failures, including cancellation, end the complete script.
-    Write-Host ($script:RepairMessages.RepairWindowsError_877 + $_.Exception.Message) -ForegroundColor Red
+    Write-Host ($script:RepairMessages.RepairWindowsError + $_.Exception.Message) -ForegroundColor Red
     throw
 } finally {
     # Never start a repair operation from finally: only cleanup belongs here.
