@@ -10,9 +10,9 @@
 | --- | --- | --- |
 | [Remove-Paths](Remove-Paths/README.ru.md) | Интерактивное безвозвратное удаление выбранных файлов и каталогов, в том числе защищённых | **Готова** |
 | [Repair-Windows](Repair-Windows/README.ru.md) | Восстановление Windows через CHKDSK, DISM и SFC | **Готова** |
-| WinRE-Manager | Управление и восстановление среды Windows RE | Планируется перенос |
+| [Repair-WinRE](Repair-WinRE/README.ru.md) | Восстановление WinRE и поддерживаемых схем Recovery на GPT/MBR | **Готова** |
 
-Теперь в PSWinKit есть **Remove-Paths** и **Repair-Windows**. Перенос **WinRE-Manager** запланирован.
+В PSWinKit входят **Remove-Paths**, **Repair-Windows** и **Repair-WinRE**.
 
 ## Требования и запуск
 
@@ -23,6 +23,7 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64, где пр�
 ```powershell
 .\Remove-Paths\Remove-Paths.ps1
 .\Repair-Windows\Repair-Windows.ps1
+.\Repair-WinRE\Repair-WinRE.ps1
 ```
 
 Описание возможностей, предупреждения и ограничения приведены в README каждой утилиты. Структуру каталогов необходимо сохранять: утилиты подключают `Common/Common.ps1` по относительному пути.
@@ -66,6 +67,7 @@ Expand-Archive -LiteralPath $zip -DestinationPath $dir
 - [`Common/README.ru.md`](Common/README.ru.md) — **полное описание общего интерфейса и обязательный контракт разработки**.
 - [`Remove-Paths/README.ru.md`](Remove-Paths/README.ru.md) — запуск, поведение и ограничения Remove-Paths.
 - [`Repair-Windows/README.ru.md`](Repair-Windows/README.ru.md) — запуск и ограничения Repair-Windows.
+- [`Repair-WinRE/README.ru.md`](Repair-WinRE/README.ru.md) — восстановление WinRE, схемы Recovery и ограничения безопасности.
 - [`README.md`](README.md) — обзор на английском языке.
 
 Лицензия проекта — [MIT](LICENSE).

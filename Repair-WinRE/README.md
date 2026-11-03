@@ -1,6 +1,6 @@
-﻿# WinRE-Manager
+# Repair-WinRE
 
-**WinRE-Manager** is an interactive Windows Recovery Environment (WinRE) repair tool for Windows PowerShell 5.1. It supports basic GPT and MBR disks, searches for an existing `Winre.wim`, and can restore WinRE from a matching Windows installation ISO when necessary.
+**Repair-WinRE** is an interactive Windows Recovery Environment (WinRE) repair tool for Windows PowerShell 5.1. It supports basic GPT and MBR disks, searches for an existing `Winre.wim`, and can restore WinRE from a matching Windows installation ISO when necessary.
 
 **[Русская документация](README.ru.md)**
 
@@ -11,7 +11,17 @@ Before requesting confirmation, an existing 7-Zip installation at the official `
 
 ## Usage
 
-Run **`WinRE-Manager.ps1`** (right-click → **Run with PowerShell**, or `& '.\WinRE-Manager.ps1'` from a PowerShell console). No script parameters are required. If administrator privileges are missing, it requests UAC and opens a separate elevated PowerShell window; the original interactive console stays open and is not terminated. `WinRE-Manager.ps1` waits for a keypress after finishing. The installer waits only when opened through Explorer; when invoked from an existing PowerShell/CMD/terminal session, it returns to the prompt without a keypress. On UAC approval, the non-elevated WinRE-Manager instance exits without an extra pause.
+From the PSWinKit root, run:
+
+```powershell
+.\Repair-WinRE\Repair-WinRE.ps1
+```
+
+No command-line parameters are required. You can also run `Repair-WinRE.ps1` from its folder or use **Run with PowerShell**. Preserve the full PSWinKit directory layout: the utility loads `..\Common\Common.ps1` relative to its script, independently of the current directory.
+
+`Start-Utility` handles language, the Repair-WinRE header, timing and UAC. If needed, it relaunches the same script in a separate elevated window with the same PowerShell architecture. The original console returns immediately; UAC cancellation performs no work. `Stop-Utility` runs after cleanup and prints the finish time and duration. An existing terminal does not normally pause; a window opened by Common through UAC pauses on exit. Explorer detection is best-effort. There is no utility-specific UAC or keypress handler.
+
+All utility-owned messages, including errors and ISO table headings, are in the `Repair-WinRE` sections of `Common/Languages/en.psd1` and `ru.psd1`. Windows UI culture selects the language with English fallback. Native output from DISM, DiskPart, REAgentC, 7-Zip and Windows exceptions is retained; it is not retranslated. DISM keeps the source utility's `/English` switch. Regional settings determine numeric, date and time formatting independently of the UI language. See the [Common contract](../Common/README.md).
 
 Workflow: **analyze → show a proposed plan → one `Y/N` confirmation → execute**. Color-coded sections separate analysis, image selection, proposed actions, safety warnings, execution, and results. Labels and values are aligned in clearly spaced columns. Any response other than `Y` cancels. There are no log files.
 
@@ -43,16 +53,9 @@ For rebuilding at the end of the disk, C: is extended to an integer number of Gi
 - If a failure occurs **after** destructive changes, the script stops and preserves the staged `Winre.wim` for manual recovery; it does not automatically undo disk operations.
 - If you interrupt the operation with **Ctrl+C**, the script tries to clean up temporary resources and displays a prominent red **OPERATION INTERRUPTED** status instead of silently showing only the final keypress prompt. If partition changes were started, inspect disk and WinRE state before retrying. A forced process termination cannot guarantee cleanup or an interruption message.
 
-## Install or update from GitHub
+## Installation and updates
 
-After publishing the files in `avmaksimov/WinRE-Manager` on branch `main`, download the installer with **Invoke-WebRequest**:
-
-```powershell
-Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/avmaksimov/WinRE-Manager/main/install.ps1?cacheBust=' + [guid]::NewGuid().ToString('N')) -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } -OutFile '.\install.ps1' -UseBasicParsing
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\install.ps1'
-```
-
-`install.ps1` uses `Invoke-WebRequest` (not curl) to download the GitHub source ZIP. The installation destination is the **current PowerShell working directory** (`Get-Location`), even when the installer script is stored elsewhere. Set the desired working directory before running it. It displays the full destination, compares SHA-256 hashes, discovers files directly in the repository ZIP (including nested folders), excludes all files and folders whose names begin with a dot (such as `.gitattributes`, `.github/`, `.env`, and `.config/`) at any level, and lists files alphabetically by relative path as `INSTALL` (new), `REPLACE` (changed), or `UNCHANGED` (skipped). It requests one `Y/N` before making changes. Unchanged files are skipped. A `WinRE-Manager.cmd` left by older installations is not deleted automatically; it may be removed manually. It stages changed files as `.new` next to their targets, creates needed subfolders, replaces files without preserving old versions, and leaves unrelated local files untouched. Previously installed dotfiles are not removed automatically. Adding a repository file does not require updating a filename list in the installer. Temporary download/extraction files are removed; it does not create its own log files. The repository must already be published and publicly accessible for the commands above to work. The installer uses the branch configured in its header.
+Use PSWinKit's root [`install.ps1` and `update.ps1`](../README.md#installation-and-updates). Repair-WinRE has no separate installer. The complete Common folder and central translations are required. No separate language files belong in this utility's folder.
 
 ## TODO
 
@@ -70,9 +73,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\install.ps1'
 ## Repository layout
 
 ```text
-WinRE-Manager/
-├── WinRE-Manager.ps1
-├── install.ps1
+Repair-WinRE/
+├── Repair-WinRE.ps1
 ├── README.md
 └── README.ru.md
 ```
+
+Shared messages: `../Common/Languages/en.psd1` and `ru.psd1`. The internal temporary names `%WINDIR%\Temp\WinRE-Manager-<GUID>` and `WinRE-Manager-Mount-<GUID>` intentionally retain their original spelling.

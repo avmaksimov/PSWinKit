@@ -1,6 +1,6 @@
 # PSWinKit — контракт разработки PowerShell-утилит
 
-Этот файл — одновременно документация `Common/Common.ps1` и обязательный контракт для `Remove-Paths`, `Repair-Windows`, будущей `WinRE-Manager` и других утилит PSWinKit. Английский эквивалент: [README.md](README.md).
+Этот файл — одновременно документация `Common/Common.ps1` и обязательный контракт для `Remove-Paths`, `Repair-Windows`, `Repair-WinRE` и других утилит PSWinKit. Английский эквивалент: [README.md](README.md).
 
 ## 1. Назначение и принципы
 
@@ -36,8 +36,12 @@ PSWinKit/
 │   ├── Remove-Paths.ps1
 │   ├── README.md
 │   └── README.ru.md
-└── Repair-Windows/
-    ├── Repair-Windows.ps1
+├── Repair-Windows/
+│   ├── Repair-Windows.ps1
+│   ├── README.md
+│   └── README.ru.md
+└── Repair-WinRE/
+    ├── Repair-WinRE.ps1
     ├── README.md
     └── README.ru.md
 ```
@@ -132,7 +136,7 @@ if ($null -eq $utility) { return }
 
 ## 9. Локализация и границы ответственности
 
-`Common/Languages/en.psd1` и `ru.psd1` содержат все переводы PSWinKit, разделённые по вложенным секциям: `Common`, `Remove-Paths`, `Repair-Windows`, `install`. Имя секции утилиты совпадает с именем основного `.ps1` без расширения. Каждая утилита по-прежнему получает **плоскую** таблицу `$utility.Messages` со своими фразами; служебные строки жизненного цикла читает только Common. Пример:
+`Common/Languages/en.psd1` и `ru.psd1` содержат все переводы PSWinKit, разделённые по вложенным секциям: `Common`, `Remove-Paths`, `Repair-Windows`, `Repair-WinRE`, `install`. Имя секции утилиты совпадает с именем основного `.ps1` без расширения. Каждая утилита по-прежнему получает **плоскую** таблицу `$utility.Messages` со своими фразами; служебные строки жизненного цикла читает только Common. Пример:
 
 ```powershell
 # Common/Languages/ru.psd1 (фрагмент)
@@ -140,6 +144,7 @@ if ($null -eq $utility) { return }
     Common = @{ Started = 'Начало: {0}' }
     'Remove-Paths' = @{ Title = 'Удаление файлов и каталогов' }
     'Repair-Windows' = @{ Title = 'Восстановление Windows' }
+    'Repair-WinRE' = @{ Title = 'Repair-WinRE — восстановление WinRE' }
     install = @{ Title = 'Установка и обновление PSWinKit' }
 }
 ```

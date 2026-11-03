@@ -162,6 +162,7 @@ function Start-Utility {
 
     $scriptFile = [IO.Path]::GetFullPath($ScriptPath)
     if (-not [IO.File]::Exists($scriptFile)) { throw "Script not found: $scriptFile" }
+    $utilityRoot = [IO.Path]::GetDirectoryName($scriptFile)
     # The main script's basename selects one section of the central dictionary.
     # Utility messages remain flat via $utility.Messages.
     $utilitySection = [IO.Path]::GetFileNameWithoutExtension($scriptFile)
@@ -176,6 +177,7 @@ function Start-Utility {
 
     $explicitLanguage = -not [string]::IsNullOrEmpty($LanguageFile)
     $selectedFile = Find-PSWinKitLanguageFile -Folder $languageFolder -Language $LanguageFile -Explicit:$explicitLanguage
+    $selectedCulture = [IO.Path]::GetFileNameWithoutExtension($selectedFile)
     $utilityMessages = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section $utilitySection -RequireTitle
     if (-not $utilityMessages.ContainsKey('Title') -or -not [string]$utilityMessages['Title']) {
         throw "Missing mandatory Title in utility translations: $selectedFile ($utilitySection)"
