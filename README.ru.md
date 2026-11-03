@@ -6,13 +6,11 @@
 
 ## Утилиты
 
-| Утилита | Назначение | Состояние |
-| --- | --- | --- |
-| [Remove-Paths](Remove-Paths/README.ru.md) | Интерактивное безвозвратное удаление выбранных файлов и каталогов, в том числе защищённых | **Готова** |
-| [Repair-Windows](Repair-Windows/README.ru.md) | Восстановление Windows через CHKDSK, DISM и SFC | **Готова** |
-| [Repair-WinRE](Repair-WinRE/README.ru.md) | Восстановление WinRE и поддерживаемых схем Recovery на GPT/MBR | **Готова** |
-
-В PSWinKit входят **Remove-Paths**, **Repair-Windows** и **Repair-WinRE**.
+| Утилита | Назначение |
+| --- | --- |
+| [Remove-Paths](Remove-Paths/README.ru.md) | Интерактивное безвозвратное удаление выбранных файлов и каталогов, в том числе защищённых |
+| [Repair-Windows](Repair-Windows/README.ru.md) | Восстановление Windows через CHKDSK, DISM и SFC |
+| [Repair-WinRE](Repair-WinRE/README.ru.md) | Восстановление WinRE и поддерживаемых схем Recovery на GPT/MBR |
 
 ## Требования и запуск
 

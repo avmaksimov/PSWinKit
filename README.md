@@ -6,13 +6,11 @@
 
 ## Utilities
 
-| Utility | Purpose | Status |
-| --- | --- | --- |
-| [Remove-Paths](Remove-Paths/README.md) | Interactively and permanently delete selected files and directories, including protected folders | **Available** |
-| [Repair-Windows](Repair-Windows/README.md) | Windows repair using CHKDSK, DISM and SFC | **Available** |
-| [Repair-WinRE](Repair-WinRE/README.md) | Restore WinRE and repair supported GPT/MBR Recovery layouts | **Available** |
-
-**Remove-Paths**, **Repair-Windows** and **Repair-WinRE** are included.
+| Utility | Purpose |
+| --- | --- |
+| [Remove-Paths](Remove-Paths/README.md) | Interactively and permanently delete selected files and directories, including protected folders |
+| [Repair-Windows](Repair-Windows/README.md) | Windows repair using CHKDSK, DISM and SFC |
+| [Repair-WinRE](Repair-WinRE/README.md) | Restore WinRE and repair supported GPT/MBR Recovery layouts |
 
 ## Requirements and use
 
