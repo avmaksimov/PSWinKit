@@ -216,68 +216,72 @@ try {
         }
     }
     if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
-    if ($changes.Count -eq 0 -and $removals.Count -eq 0 -and -not $manifestChanged) {
+    $metadataOnly = $changes.Count -eq 0 -and $removals.Count -eq 0
+    if ($metadataOnly -and -not $manifestChanged) {
         Write-Host $m.UpToDate -ForegroundColor Green
         return
     }
 
-    $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
-    $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
-    $unchangedCount = $entries.Count - $changes.Count
-    Write-Host $m.StateLegend -ForegroundColor DarkGray
-    Write-Host ''
-    Write-Host $m.SummaryTitle -ForegroundColor Cyan
-    Write-Host ($m.Destination -f $target) -ForegroundColor Gray
-    Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
-    Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
-    Write-Host ''
-    foreach ($item in @($entries) + @($removals)) {
-        $stateColor = switch ($item.State) {
-            'INSTALL' { 'Green' }
-            'REPLACE' { 'Yellow' }
-            'REMOVE' { 'Red' }
-            default { 'DarkGray' }
+    if (-not $metadataOnly) {
+        $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
+        $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
+        $unchangedCount = $entries.Count - $changes.Count
+        Write-Host $m.StateLegend -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host $m.SummaryTitle -ForegroundColor Cyan
+        Write-Host ($m.Destination -f $target) -ForegroundColor Gray
+        Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
+        Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
+        Write-Host ''
+        foreach ($item in @($entries) + @($removals)) {
+            $stateColor = switch ($item.State) {
+                'INSTALL' { 'Green' }
+                'REPLACE' { 'Yellow' }
+                'REMOVE' { 'Red' }
+                default { 'DarkGray' }
+            }
+            Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
+            $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
+            Write-Host $item.Name -ForegroundColor $nameColor
         }
-        Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
-        $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
-        Write-Host $item.Name -ForegroundColor $nameColor
-    }
-    Write-Host ''
-    Write-Host $m.ChangeNotice -ForegroundColor Gray
-    Write-Host $m.NoBackups -ForegroundColor Gray
-    Write-Host ''
-    $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
-    if ($choice -cne 'Y') {
-        Write-Host $m.Canceled
-        return
-    }
+        Write-Host ''
+        Write-Host $m.ChangeNotice -ForegroundColor Gray
+        Write-Host $m.NoBackups -ForegroundColor Gray
+        Write-Host ''
+        $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
+        if ($choice -cne 'Y') {
+            Write-Host $m.Canceled
+            return
+        }
 
-    # Stage every changed file beside its destination; then replace via move.
-    # Nothing is removed before every staged SHA-256 has been verified.
-    foreach ($item in $changes) {
-        $parentDir = Split-Path -Path $item.Target -Parent
-        if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
-            New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+        # Stage every changed file beside its destination; then replace via move.
+        # Nothing is removed before every staged SHA-256 has been verified.
+        foreach ($item in $changes) {
+            $parentDir = Split-Path -Path $item.Target -Parent
+            if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
+                New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+            }
+            $staged = $item.Target + '.new'
+            if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
+            $stagedFiles.Add($staged)
+            Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
+            if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
+                throw ($m.HashMismatch -f $staged)
+            }
         }
-        $staged = $item.Target + '.new'
-        if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
-        $stagedFiles.Add($staged)
-        Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
-        if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
-            throw ($m.HashMismatch -f $staged)
+        # Replace the updater last; its running code is already loaded in memory.
+        foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +
+                         @($changes | Where-Object { $_.Name -ieq 'update.ps1' })) {
+            $staged = $item.Target + '.new'
+            Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
+            $verb = if ($item.State -eq 'INSTALL') { $m.Installed } else { $m.Replaced }
+            Write-Host ("${verb}: $($item.Name)") -ForegroundColor Green
         }
-    }
-    # Replace the updater last; its running code is already loaded in memory.
-    foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +
-                     @($changes | Where-Object { $_.Name -ieq 'update.ps1' })) {
-        $staged = $item.Target + '.new'
-        Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
-        $verb = if ($item.State -eq 'INSTALL') { $m.Installed } else { $m.Replaced }
-        Write-Host ("${verb}: $($item.Name)") -ForegroundColor Green
-    }
-    foreach ($item in $removals) {
-        Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
-        Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
+        foreach ($item in $removals) {
+            Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
+            Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
+        }
+
     }
 
     # A machine-written PSD1 inventory: no SHA-256, and no inventory of its own.
@@ -298,7 +302,12 @@ try {
     [IO.File]::WriteAllText($manifestStage, (($stateLines -join "`r`n") + "`r`n"), ([Text.UTF8Encoding]::new($true)))
     Move-Item -LiteralPath $manifestStage -Destination $manifest -Force -ErrorAction Stop
     Write-Host ''
-    Write-Host $m.Completed -ForegroundColor Green
+    if ($metadataOnly) {
+        Write-Host $m.UpToDate -ForegroundColor Green
+    }
+    else {
+        Write-Host $m.Completed -ForegroundColor Green
+    }
 }
 catch {
     $failed = $true

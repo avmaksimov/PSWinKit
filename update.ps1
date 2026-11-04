@@ -77,6 +77,7 @@ try {
             return
         }
         Write-Host $m.NewVersion -ForegroundColor Cyan
+        Write-Host ''
         $url = "https://github.com/$owner/$repository/archive/$metadataSha.zip"
     }
     catch {
