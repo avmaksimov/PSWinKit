@@ -5,8 +5,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$Commit = '',
-    [string]$CommitDate = ''
+    [string]$Commit = ''
 )
 
 Set-StrictMode -Version 2.0
@@ -21,16 +20,41 @@ if ($null -eq $utility) { return }
 $m = $utility.Messages
 $versionDateUtc = ''
 $versionLabel = $m.UnknownVersion
-if (-not [string]::IsNullOrEmpty($Commit) -or -not [string]::IsNullOrEmpty($CommitDate)) {
-    if ($Commit -notmatch '^[0-9a-fA-F]{40}$' -or [string]::IsNullOrWhiteSpace($CommitDate)) {
-        throw $m.InvalidVersion
+
+# An explicit empty -Commit means the updater could not verify the ZIP.
+# Without any parameters, resolve the current main commit for direct installation.
+$explicitCommit = $PSBoundParameters.ContainsKey('Commit')
+if ($Commit -ne '' -and $Commit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw $m.InvalidVersion
+}
+if (-not ($explicitCommit -and $Commit -eq '')) {
+    $ref = if ($Commit -ne '') { $Commit } else { 'main' }
+    $apiUrl = "https://api.github.com/repos/avmaksimov/PSWinKit/commits/$ref"
+    $apiHeaders = @{ 'User-Agent' = 'PSWinKit-Installer'; 'Accept' = 'application/vnd.github+json' }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $remote = Invoke-RestMethod -Uri $apiUrl -Headers $apiHeaders -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+        $resolvedCommit = [string]$remote.sha
+        $resolvedDate = [string]$remote.commit.committer.date
+        if ($resolvedCommit -notmatch '^[0-9a-fA-F]{40}$' -or
+            ($Commit -ne '' -and $resolvedCommit -ine $Commit)) {
+            throw $m.InvalidVersion
+        }
+        $parsedDate = [datetimeoffset]::MinValue
+        if (-not [datetimeoffset]::TryParse($resolvedDate, [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedDate)) {
+            throw $m.InvalidVersion
+        }
+        $Commit = $resolvedCommit.ToLowerInvariant()
+        $versionDateUtc = $parsedDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+        $versionLabel = '{0} ({1})' -f $parsedDate.ToLocalTime().ToString('G', [Globalization.CultureInfo]::CurrentCulture), $Commit.Substring(0, 8)
     }
-    $parsedDate = [datetimeoffset]::MinValue
-    if (-not [datetimeoffset]::TryParse($CommitDate, [Globalization.CultureInfo]::InvariantCulture,
-        [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedDate)) { throw $m.InvalidVersion }
-    $Commit = $Commit.ToLowerInvariant()
-    $versionDateUtc = $parsedDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
-    $versionLabel = '{0} ({1})' -f $parsedDate.ToLocalTime().ToString('G', [Globalization.CultureInfo]::CurrentCulture), $Commit.Substring(0, 8)
+    catch {
+        # Never write a failed lookup as a verified installed version.
+        $Commit = ''
+        $versionDateUtc = ''
+        Write-Warning ('{0}: {1}' -f $m.UnknownVersion, $_.Exception.Message)
+    }
 }
 $stagedFiles = New-Object 'System.Collections.Generic.List[string]'
 $manifest = Join-Path $target 'install.psd1'

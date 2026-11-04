@@ -37,7 +37,6 @@ $branchUrl = "https://github.com/$owner/$repository/archive/refs/heads/$branch.z
 $noCacheHeaders = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
 $apiHeaders = @{ 'User-Agent' = 'PSWinKit-Updater'; 'Accept' = 'application/vnd.github+json' }
 $metadataSha = ''
-$metadataDate = ''
 
 function Format-CommitVersion {
     param([string]$Commit, [string]$CommitDate)
@@ -84,8 +83,6 @@ try {
         $formatted = Format-CommitVersion -Commit $candidateSha -CommitDate $candidateDate
         if (-not $formatted) { throw 'Invalid commit metadata returned by GitHub.' }
         $metadataSha = $candidateSha.ToLowerInvariant()
-        $metadataDate = ([datetimeoffset]::Parse($candidateDate, [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::AssumeUniversal)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
         Write-Host "Latest version: $formatted"
         if ($installedVersion -ne 'First installation' -and $installedVersion -ne 'Unknown' -and
             $state -is [hashtable] -and
@@ -101,7 +98,6 @@ try {
     }
     catch {
         $metadataSha = ''
-        $metadataDate = ''
         Write-Host ('Could not check the latest commit: ' + $_.Exception.Message) -ForegroundColor Yellow
         Write-Host 'Trying the main branch ZIP; the installed version will be recorded as unknown.' -ForegroundColor Yellow
     }
@@ -122,7 +118,7 @@ try {
         }
     }
     $installerStarted = $true
-    & (Join-Path $sourceRoot 'install.ps1') -Commit $metadataSha -CommitDate $metadataDate
+    & (Join-Path $sourceRoot 'install.ps1') -Commit $metadataSha
 }
 catch {
     Write-Host ''
