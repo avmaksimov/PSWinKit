@@ -98,8 +98,7 @@ function Get-PSWinKitText {
 
 function Format-PSWinKitDateTime {
     param([datetime]$Value)
-    $culture = [Globalization.CultureInfo]::CurrentCulture
-    return ($Value.ToString('d', $culture) + ' ' + $Value.ToString('T', $culture))
+    return $Value.ToString('G', [Globalization.CultureInfo]::CurrentCulture)
 }
 
 function Format-PSWinKitDuration {
