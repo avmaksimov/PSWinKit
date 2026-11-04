@@ -15,19 +15,27 @@ $target = (Get-Location).ProviderPath
 # Executed from the freshly extracted PSWinKit source tree.
 # Destination is the caller's current working directory.
 . (Join-Path $PSScriptRoot 'Common\Common.ps1')
-$utility = Start-Utility -ScriptPath $PSCommandPath
-if ($null -eq $utility) { return }
-$m = $utility.Messages
+$fromUpdater = $PSBoundParameters.ContainsKey('Commit')
+$utility = $null
+if ($fromUpdater) {
+    $languageFolder = Join-Path $PSScriptRoot 'Common\Languages'
+    $selectedFile = Find-PSWinKitLanguageFile -Folder $languageFolder
+    $m = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section 'install'
+}
+else {
+    $utility = Start-Utility -ScriptPath $PSCommandPath
+    if ($null -eq $utility) { return }
+    $m = $utility.Messages
+}
 $versionDateUtc = ''
 $versionLabel = $m.UnknownVersion
 
 # An explicit empty -Commit means the updater could not verify the ZIP.
 # Without any parameters, resolve the current main commit for direct installation.
-$explicitCommit = $PSBoundParameters.ContainsKey('Commit')
 if ($Commit -ne '' -and $Commit -notmatch '^[0-9a-fA-F]{40}$') {
     throw $m.InvalidVersion
 }
-if (-not ($explicitCommit -and $Commit -eq '')) {
+if (-not ($fromUpdater -and $Commit -eq '')) {
     $ref = if ($Commit -ne '') { $Commit } else { 'main' }
     $apiUrl = "https://api.github.com/repos/avmaksimov/PSWinKit/commits/$ref"
     $apiHeaders = @{ 'User-Agent' = 'PSWinKit-Installer'; 'Accept' = 'application/vnd.github+json' }
@@ -305,6 +313,6 @@ finally {
     if ($manifestStageCreated -and (Test-Path -LiteralPath $manifestStage -PathType Leaf)) {
         Remove-Item -LiteralPath $manifestStage -Force -ErrorAction SilentlyContinue
     }
-    Stop-Utility -Utility $utility
+    if ($null -ne $utility) { Stop-Utility -Utility $utility }
 }
 if ($failed) { throw $m.Failed }
