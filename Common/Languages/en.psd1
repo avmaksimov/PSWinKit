@@ -453,4 +453,25 @@
         TableArchitecture = 'Architecture'
         TableName = 'Name'
     }
+
+    'update' = @{
+        Title = 'PSWinKit update'
+        Destination = 'Destination: {0}'
+        FirstInstallation = 'First installation'
+        UnknownVersion = 'Unknown'
+        InstalledVersion = 'Installed version: {0}'
+        CheckingGitHub = 'Checking the latest commit on GitHub...'
+        InvalidCommitMetadata = 'Invalid commit metadata returned by GitHub.'
+        LatestVersion = 'Latest version: {0}'
+        AlreadyLatest = 'The latest version is already installed. No update required.'
+        NewVersion = 'A newer or unverified version is available.'
+        ApiCheckFailed = 'Could not check the latest commit: {0}'
+        FallbackZip = 'Trying the main branch ZIP; the installed version will be recorded as unknown.'
+        Source = 'Source: {0}'
+        Downloading = 'Downloading repository ZIP with Invoke-WebRequest...'
+        ZipMissing = 'Downloaded ZIP not found.'
+        InvalidZipRoot = 'Unexpected ZIP root structure.'
+        ZipFileMissing = 'Invalid PSWinKit ZIP: missing {0}'
+        UpdateError = 'UPDATE ERROR: {0}'
+    }
 }

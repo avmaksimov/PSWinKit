@@ -453,4 +453,25 @@
         TableArchitecture = 'Архитектура'
         TableName = 'Название'
     }
+
+    'update' = @{
+        Title = 'Обновление PSWinKit'
+        Destination = 'Каталог установки: {0}'
+        FirstInstallation = 'Первая установка'
+        UnknownVersion = 'Неизвестна'
+        InstalledVersion = 'Установленная версия: {0}'
+        CheckingGitHub = 'Проверка последнего коммита на GitHub...'
+        InvalidCommitMetadata = 'GitHub вернул некорректные сведения о коммите.'
+        LatestVersion = 'Последняя версия: {0}'
+        AlreadyLatest = 'Установлена последняя версия. Обновление не требуется.'
+        NewVersion = 'Найдена новая версия или версия установки не подтверждена.'
+        ApiCheckFailed = 'Не удалось проверить последний коммит: {0}'
+        FallbackZip = 'Попытка скачать ZIP ветки main; версия установки будет отмечена как неизвестная.'
+        Source = 'Источник: {0}'
+        Downloading = 'Скачивание ZIP-архива репозитория через Invoke-WebRequest...'
+        ZipMissing = 'Скачанный ZIP-архив не найден.'
+        InvalidZipRoot = 'Неожиданная структура корня ZIP-архива.'
+        ZipFileMissing = 'Неполный архив PSWinKit: отсутствует {0}'
+        UpdateError = 'ОШИБКА ОБНОВЛЕНИЯ: {0}'
+    }
 }
