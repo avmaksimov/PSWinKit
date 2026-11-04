@@ -33,9 +33,8 @@ For utility-specific instructions and safety warnings, follow the utility link a
 Open Windows PowerShell 5.1 **in the existing directory** where you want to install PSWinKit. Download the repository ZIP to a temporary location, extract it, and run `install.ps1`:
 
 ```powershell
-$name = 'PSWinKit-' + [guid]::NewGuid().ToString('N')
-$zip = Join-Path $env:TEMP "$name.zip"
-$dir = Join-Path $env:TEMP $name
+$dir = Join-Path $env:TEMP ('PSWinKit-' + [guid]::NewGuid().ToString('N'))
+$zip = "$dir.zip"
 
 $url = 'https://github.com/avmaksimov/PSWinKit/archive/refs/heads/main.zip?cacheBust=' + [guid]::NewGuid().ToString('N')
 Invoke-WebRequest -Uri $url `
@@ -46,7 +45,7 @@ Expand-Archive -LiteralPath $zip -DestinationPath $dir
 & (Join-Path $dir 'PSWinKit-main\install.ps1')
 ```
 
-The installer reads the files and translations from the extracted archive, but installs PSWinKit **into the current working directory** (`Get-Location`). There is no need to create the target directory in this example, and `update.ps1` is not used for initial installation. Since this direct installation does not pass commit metadata, `install-info` records an unknown SHA and date until a subsequent update.
+The installer reads files and translations from the extracted archive and installs them **directly into the current working directory** (`Get-Location`), **without creating a nested `PSWinKit` folder**. The `PSWinKit-main` folder exists only in the temporary ZIP extraction directory. `update.ps1` is not used for initial installation. During initial installation, `install.ps1` retrieves the latest `main` commit SHA and date from the GitHub API and stores them in `install-info`. If the API is unavailable, the commit information remains unknown.
 
 ### Subsequent updates
 
@@ -58,7 +57,7 @@ From the existing PSWinKit installation directory, run:
 
 `update.ps1` compares the installed SHA with the latest commit on GitHub's `main` branch. If they differ or the installed SHA is unknown, it downloads the source archive and invokes a fresh `install.ps1`. When the GitHub API is available, the archive is pinned to a specific commit and its SHA and date are recorded; if the API is unavailable, it falls back to `main.zip` without verified version metadata. The installer does not require elevation unless the destination directory requires it.
 
-Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. An unverified ZIP installation records empty commit fields; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
+Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. If the GitHub API cannot verify the commit, the commit fields remain empty; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
 
 ## Project organization
 
