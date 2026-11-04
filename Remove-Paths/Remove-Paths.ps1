@@ -12,10 +12,10 @@ if ($null -eq $utility) { return }
 $ErrorActionPreference = 'Stop'
 $UtilityMessages = $utility.Messages
 
-# Format counts consistently with spaces, regardless of the Windows culture.
+# Format counts using Windows regional number settings.
 function Format-Count {
     param([long]$Value)
-    return $Value.ToString('N0', [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ')
+    return $Value.ToString('N0', [Globalization.CultureInfo]::CurrentCulture)
 }
 
 # Utility-specific translations are available in $utility.Messages.
@@ -30,7 +30,7 @@ function T {
     if (-not $UtilityMessages.ContainsKey($Key)) { throw "Missing Remove-Paths translation: $Key" }
     $template = [string]$UtilityMessages[$Key]
     if ($formatted.Count -eq 0) { return $template }
-    return [string]::Format([Globalization.CultureInfo]::InvariantCulture, $template, [object[]]$formatted)
+    return [string]::Format([Globalization.CultureInfo]::CurrentCulture, $template, [object[]]$formatted)
 }
 
 

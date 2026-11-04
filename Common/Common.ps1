@@ -93,7 +93,7 @@ function Get-PSWinKitText {
     if (-not $Messages.ContainsKey($Key)) { throw "Missing Common language key: $Key" }
     $template = [string]$Messages[$Key]
     if ($Values.Count -eq 0) { return $template }
-    return [string]::Format([Globalization.CultureInfo]::InvariantCulture, $template, [object[]]$Values)
+    return [string]::Format([Globalization.CultureInfo]::CurrentCulture, $template, [object[]]$Values)
 }
 
 function Format-PSWinKitDateTime {
@@ -107,7 +107,7 @@ function Format-PSWinKitDuration {
     $clock = '{0:00}{3}{1:00}{3}{2:00}' -f $Value.Hours, $Value.Minutes, $Value.Seconds, $separator
     $days = [long][Math]::Floor($Value.TotalDays)
     if ($days -gt 0) {
-        $number = $days.ToString('N0', [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ')
+        $number = $days.ToString('N0', [Globalization.CultureInfo]::CurrentCulture)
         return ($number + (Get-PSWinKitText -Messages $Messages -Key 'DaySuffix') + ' ' + $clock)
     }
     return $clock
