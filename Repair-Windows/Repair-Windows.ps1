@@ -503,6 +503,20 @@ function Get-RepairVolumes {
     return @($volumes.Keys)
 }
 
+# Present recognizable Repair-Volume statuses in the active utility language.
+# Keep the raw status in the summary only when no mapping exists.
+function Get-VolumeStatusText {
+    param([string]$Status)
+    switch ($Status) {
+        'NoErrorsFound'            { return $script:RepairMessages.TheFileSystemIs }
+        'SpotFixNeeded'            { return $script:RepairMessages.VolumeSpotFixNeeded }
+        'OfflineScanAndFixNeeded'  { return $script:RepairMessages.VolumeOfflineFixNeeded }
+        'ScanNeeded'               { return $script:RepairMessages.VolumeScanNeeded }
+        'Repaired'                 { return $script:RepairMessages.VerificationNoErrorsFound }
+        default                    { return $Status }
+    }
+}
+
 function Test-SystemVolume {
     param([version]$OsVersion, [string]$Drive)
     $drive = [string]$Drive
@@ -513,6 +527,7 @@ function Test-SystemVolume {
         return
     }
     $letter = [char]$drive.Substring(0, 1)
+    if ($script:VolumeChecks.Count -gt 0) { Write-Host '' }
     Write-Host ($script:RepairMessages.NCheckingFileSystemOn -f $drive) -ForegroundColor Cyan
     if ($OsVersion -ge [version]'6.2') {
         $cmdlet = Get-Command Repair-Volume -ErrorAction SilentlyContinue
@@ -522,14 +537,13 @@ function Test-SystemVolume {
                 if ($scan.Count -ne 1) { throw $script:RepairMessages.RepairVolumeReturnedAn }
                 $status = ([string]$scan[0]).Trim()
                 $script:VolumeStatus = $status
-                Write-Host ('Repair-Volume -Scan: ' + $status)
                 if ($status -eq 'NoErrorsFound') {
                     Write-Host $script:RepairMessages.TheFileSystemIs -ForegroundColor Green
                     return
                 }
                 if (@('SpotFixNeeded', 'OfflineScanAndFixNeeded', 'ScanNeeded') -contains $status) {
                     $script:VolumeNeedsAttention = $true
-                    Write-Host ($script:RepairMessages.TheVolumeNeedsRepair + $status) -ForegroundColor Yellow
+                    Write-Host (Get-VolumeStatusText -Status $status) -ForegroundColor Yellow
                     $spot = ($status -eq 'SpotFixNeeded')
                     $mode = if ($spot) { 'SpotFix' } else { 'OfflineScanAndFix' }
                     if (Ask-YesNo ($script:RepairMessages.TryRepairVolume0 -f $mode, $drive) $true) {
@@ -551,17 +565,21 @@ function Test-SystemVolume {
                         } catch [System.Management.Automation.PipelineStoppedException] {
                             throw
                         } catch {
-                            Write-Host ($script:RepairMessages.OnlineRepairDidNot + $_.Exception.Message) -ForegroundColor Yellow
+                            Write-Host ($script:RepairMessages.OnlineRepairDidNot + $_.Exception.Message) -ForegroundColor Red
                         }
                     }
                     Schedule-SystemVolumeCheck -Drive $drive
                     return
                 }
-                Write-Host $script:RepairMessages.UnknownRepairVolumeStatus -ForegroundColor Yellow
+                Write-Host ($script:RepairMessages.UnknownRepairVolumeStatus -f $status) -ForegroundColor Yellow
             } catch [System.Management.Automation.PipelineStoppedException] {
                 throw
             } catch {
-                Write-Host ($script:RepairMessages.CouldNotCheckThe + $_.Exception.Message) -ForegroundColor Yellow
+                $errorText = [string]$_.Exception.Message
+                if ([string]::IsNullOrWhiteSpace($errorText)) {
+                    $errorText = Format-ExitCode ([int]$_.Exception.HResult)
+                }
+                Write-Host ($script:RepairMessages.CouldNotCheckThe + $errorText) -ForegroundColor Red
                 Write-Host $script:RepairMessages.SwitchingToReadOnly -ForegroundColor Yellow
             }
         } else {
@@ -578,7 +596,7 @@ function Test-SystemVolume {
         return
     }
     $script:VolumeNeedsAttention = $true
-    Write-Host ('CHKDSK: ' + (Format-ExitCode $code)) -ForegroundColor Yellow
+    Write-Host ('CHKDSK: ' + (Format-ExitCode $code)) -ForegroundColor Red
     Write-Host $script:RepairMessages.TheFileSystemMay
     Schedule-SystemVolumeCheck -Drive $drive
 }
@@ -755,8 +773,10 @@ try {
     if ($release) { $osName = '{0} {1}' -f $osName, $release }
     Write-Host ($script:RepairMessages.OS0Version1 -f $osName, $os.Version)
     Write-Host ($script:RepairMessages.Edition0Type1 -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
+    Write-Host ''
     Write-Host $script:RepairMessages.TheScriptDoesNot
     Write-Host $script:RepairMessages.CtrlCCancelAll -ForegroundColor Yellow
+    Write-Host ''
 
     $anyAttention = $false
     $anyScheduled = $false
@@ -835,7 +855,9 @@ try {
     Write-Host $script:RepairMessages.SUMMARY -ForegroundColor Cyan
     Write-Host $script:RepairMessages.CheckedVolumes
     foreach ($check in $script:VolumeChecks) {
-        Write-Host ('  {0} {1}' -f $check.Drive, $check.Status)
+        $statusText = Get-VolumeStatusText -Status ([string]$check.Status)
+        $statusColor = if (-not $check.NeedsAttention) { 'Green' } else { 'Yellow' }
+        Write-Host ('  {0} {1}' -f $check.Drive, $statusText) -ForegroundColor $statusColor
     }
     if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup -ForegroundColor Yellow }
     if ($null -ne $script:DiskResult) {
