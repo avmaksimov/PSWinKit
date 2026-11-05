@@ -231,6 +231,7 @@ try {
         Write-Host $m.SummaryTitle -ForegroundColor Cyan
         Write-Host ($m.Destination -f $target) -ForegroundColor Gray
         Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
+        Write-Host ''
         Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
         Write-Host ''
         foreach ($item in @($entries) + @($removals)) {
