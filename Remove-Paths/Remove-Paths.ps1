@@ -393,7 +393,8 @@ function Finish-DeletionCounters {
 }
 
 function Show-Summary {
-    Write-Host "`n$(T 'SummaryTitle')" -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host (T 'SummaryTitle') -ForegroundColor Cyan
     Write-Host (T 'SummaryResult' -Values @($script:Result))
 
     # Do not repeat successfully deleted paths. Show only those still remaining,
@@ -659,7 +660,8 @@ function Invoke-Main {
     $script:SelectedTargets = $selected.ToArray()
     $script:TargetCount = $selected.Count
     $script:SkippedCount = $entries.Count - $selected.Count
-    Write-Host "`n$(T 'PreviewTitle')" -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host (T 'PreviewTitle') -ForegroundColor Cyan
     Write-Host (T 'PreviewCounts' -Values @($selected.Count, $script:SkippedCount))
     foreach ($entry in $entries) {
         if ($entry.State -eq 'Skipped') {
@@ -695,7 +697,8 @@ function Invoke-Main {
         $script:CurrentNumber = $entry.Number
         $script:CurrentTarget = $path
         $entry.State = 'Started'
-        Write-Host ("`n[{0}/{1}] {2} {3} ..." -f (Format-Count $script:StartedCount), (Format-Count $selected.Count), (T 'Removing'), $path) -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host ("[{0}/{1}] {2} {3} ..." -f (Format-Count $script:StartedCount), (Format-Count $selected.Count), (T 'Removing'), $path) -ForegroundColor Cyan
         $script:CounterStartFiles = $script:DeletedFileCount
         $script:CounterStartFolders = $script:DeletedFolderCount
         $script:CounterStartErrors = $script:FailureCount
@@ -754,7 +757,8 @@ try {
 catch {
     $script:MainError = $_.Exception.Message
     $script:Result = T 'StatusError'
-    Write-Host "`n$script:MainError" -ForegroundColor Red
+    Write-Host ''
+    Write-Host $script:MainError -ForegroundColor Red
 }
 finally {
     Finish-DeletionCounters

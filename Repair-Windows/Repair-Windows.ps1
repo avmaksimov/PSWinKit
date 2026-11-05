@@ -360,10 +360,12 @@ function Run-Dism {
         $argList += ('/Source:{0}:"{1}":{2}' -f $kind, $ImagePath, $ImageIndex)
         # Always permit the Windows Update fallback: do not add /LimitAccess.
         # Actual Microsoft Update access still depends on local policies/network.
-        Write-Host ($script:RepairMessages.NDISMUsingSource0 -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host ($script:RepairMessages.DISMUsingSource0 -f $ImagePath, $ImageIndex) -ForegroundColor Cyan
         Write-Host $script:RepairMessages.WindowsUpdateFallbackIs
     } else {
-        Write-Host $script:RepairMessages.NDISMUsingTheDefault -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host $script:RepairMessages.DISMUsingTheDefault -ForegroundColor Cyan
     }
 
     # Do not catch cancellation and turn it into an ordinary DISM error.
@@ -528,7 +530,7 @@ function Test-SystemVolume {
     }
     $letter = [char]$drive.Substring(0, 1)
     if ($script:VolumeChecks.Count -gt 0) { Write-Host '' }
-    Write-Host ($script:RepairMessages.NCheckingFileSystemOn -f $drive) -ForegroundColor Cyan
+    Write-Host ($script:RepairMessages.CheckingFileSystemOn -f $drive) -ForegroundColor Cyan
     if ($OsVersion -ge [version]'6.2') {
         $cmdlet = Get-Command Repair-Volume -ErrorAction SilentlyContinue
         if ($null -ne $cmdlet) {
@@ -828,7 +830,8 @@ try {
                     $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
                 }
             } else {
-                Write-Host $script:RepairMessages.NWindowsClientTryingDISM -ForegroundColor Cyan
+                Write-Host ''
+                Write-Host $script:RepairMessages.WindowsClientTryingDISM -ForegroundColor Cyan
                 $script:DiskResult = Run-Dism -ImagePath $null -ImageIndex 0
             }
             if (($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
@@ -849,7 +852,8 @@ try {
         }
 
         # SFC must NOT be in finally: Ctrl+C must not launch the next repair operation.
-        Write-Host $script:RepairMessages.NCheckingSystemFilesSFC -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host $script:RepairMessages.CheckingSystemFilesSFC -ForegroundColor Cyan
         $script:SfcResult = Invoke-RepairExecutable -Executable $script:SfcExe -Arguments '/scannow'
     }
     Write-Host ''

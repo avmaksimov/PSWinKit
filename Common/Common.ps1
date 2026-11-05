@@ -360,7 +360,8 @@ function Stop-Utility {
 
     if ($Utility.PauseOnExit) {
         try {
-            Write-Host "`n$(Get-PSWinKitText -Messages $commonMessages -Key 'PressAnyKey')" -ForegroundColor DarkGray
+            Write-Host ''
+            Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'PressAnyKey') -ForegroundColor DarkGray
             try { [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') }
             catch { [void](Read-Host (Get-PSWinKitText -Messages $commonMessages -Key 'PressEnter')) }
         }

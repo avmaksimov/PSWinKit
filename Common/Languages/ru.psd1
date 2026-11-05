@@ -118,9 +118,9 @@
         ImageIndexEnterCancel = 'Индекс образа (Enter — отмена)'
         TheIndexIsNot = 'Такого индекса в списке нет. Попробуйте ещё раз.'
         FailedToStart = 'Не удалось запустить '
-        NDISMUsingSource0 = "`nDISM с источником: {0}; индекс {1}"
+        DISMUsingSource0 = "DISM с источником: {0}; индекс {1}"
         WindowsUpdateFallbackIs = 'Резервный источник Windows Update разрешён (/LimitAccess не используется; доступ зависит от политик).'
-        NDISMUsingTheDefault = "`nDISM со стандартным источником восстановления."
+        DISMUsingTheDefault = "DISM со стандартным источником восстановления."
         Error0x800F0915InspectCBS = 'Ошибка 0x800F0915: изучите ошибки CBS.log; совпадение редакции ISO не гарантирует наличия нужных компонентов.'
         RepairUsingTheISO = 'Восстановление с ISO не удалось. Это не ошибка выбора индекса сама по себе:'
         SomeRequiredFileVersions = 'часть требуемых версий файлов может отсутствовать в образе; проверьте CBS.log.'
@@ -132,7 +132,7 @@
         ChkntfsError = 'Ошибка chkntfs: '
         InvalidVolumeDriveLetter = 'Некорректная буква тома.'
         CouldNotDetermineThe = 'Не удалось определить системный том: '
-        NCheckingFileSystemOn = "Проверка файловой системы {0}..."
+        CheckingFileSystemOn = "Проверка файловой системы {0}..."
         RepairVolumeReturnedAn = 'Repair-Volume вернул пустой или неоднозначный результат.'
         TheFileSystemIs = 'Файловая система исправна.'
         TheVolumeNeedsRepair = 'Тому требуется исправление или дополнительная проверка: '
@@ -212,12 +212,12 @@
         OnlySFCWillRun = 'Будет выполнен только SFC. Для восстановления хранилища используйте KB947821 (CheckSUR).'
         WindowsServerSpecifyAn = 'Windows Server: укажите ISO/WIM/ESD, если он доступен (Enter — без источника).'
         NoSourceSelectedRunning = 'Источник не выбран. Запускается DISM с настройками источника по умолчанию.'
-        NWindowsClientTryingDISM = "`nWindows Client: сначала DISM без ISO."
+        WindowsClientTryingDISM = "Windows Client: сначала DISM без ISO."
         DISMCouldNotRepair = 'DISM не смог восстановить Windows со штатным источником.'
         NoRepairSourceSelected = 'Источник восстановления не выбран. Переходим к SFC.'
         RepairWithTheSelected = 'Восстановление с выбранным образом не удалось. Попробовать другой ISO/WIM/ESD?'
         RetryUsingISOCanceled = 'Повторное восстановление с ISO отменено. Исходная ошибка DISM сохраняется.'
-        NCheckingSystemFilesSFC = "`nПроверка системных файлов: SFC /scannow"
+        CheckingSystemFilesSFC = "Проверка системных файлов: SFC /scannow"
         SUMMARY = '====================== ИТОГ ======================'
         SystemVolume = 'Системный том: '
         RepairScheduledAtStartup = 'Исправление запланировано при загрузке.'

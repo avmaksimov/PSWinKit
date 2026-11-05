@@ -118,9 +118,9 @@
         ImageIndexEnterCancel = 'Image index (Enter — cancel)'
         TheIndexIsNot = 'The index is not in the list. Try again.'
         FailedToStart = 'Failed to start '
-        NDISMUsingSource0 = "`nDISM using source: {0}; index {1}"
+        DISMUsingSource0 = "DISM using source: {0}; index {1}"
         WindowsUpdateFallbackIs = 'Windows Update fallback is allowed (/LimitAccess is not used; access depends on policies).'
-        NDISMUsingTheDefault = "`nDISM using the default repair source."
+        DISMUsingTheDefault = "DISM using the default repair source."
         Error0x800F0915InspectCBS = 'Error 0x800F0915: inspect CBS.log; a matching ISO edition does not guarantee the required components exist.'
         RepairUsingTheISO = 'Repair using the ISO failed. This does not necessarily mean the index was wrong:'
         SomeRequiredFileVersions = 'Some required file versions may be missing from the image; inspect CBS.log.'
@@ -132,7 +132,7 @@
         ChkntfsError = 'chkntfs error: '
         InvalidVolumeDriveLetter = 'Invalid volume drive letter.'
         CouldNotDetermineThe = 'Could not determine the system volume: '
-        NCheckingFileSystemOn = "Checking file system on {0}..."
+        CheckingFileSystemOn = "Checking file system on {0}..."
         RepairVolumeReturnedAn = 'Repair-Volume returned an empty or ambiguous result.'
         TheFileSystemIs = 'The file system is healthy.'
         TheVolumeNeedsRepair = 'The volume needs repair or further checking: '
@@ -212,12 +212,12 @@
         OnlySFCWillRun = 'Only SFC will run. Use KB947821 (CheckSUR) to repair the component store.'
         WindowsServerSpecifyAn = 'Windows Server: specify an ISO/WIM/ESD if available (Enter — use no explicit source).'
         NoSourceSelectedRunning = 'No source selected. Running DISM using default repair-source settings.'
-        NWindowsClientTryingDISM = "`nWindows client: trying DISM without an ISO first."
+        WindowsClientTryingDISM = "Windows client: trying DISM without an ISO first."
         DISMCouldNotRepair = 'DISM could not repair Windows from the default source.'
         NoRepairSourceSelected = 'No repair source selected. Continuing to SFC.'
         RepairWithTheSelected = 'Repair with the selected image failed. Try another ISO/WIM/ESD?'
         RetryUsingISOCanceled = 'Retry using ISO canceled. The original DISM error remains.'
-        NCheckingSystemFilesSFC = "`nChecking system files: SFC /scannow"
+        CheckingSystemFilesSFC = "Checking system files: SFC /scannow"
         SUMMARY = '====================== SUMMARY ======================'
         SystemVolume = 'System volume: '
         RepairScheduledAtStartup = 'Repair scheduled at startup.'
