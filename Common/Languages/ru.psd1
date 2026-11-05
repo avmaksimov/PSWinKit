@@ -203,7 +203,7 @@
         FolderMusic = 'Музыка'
         FolderVideos = 'Видео'
         Edition0Type1 = 'Редакция: {0}; тип: {1}'
-        TheScriptDoesNot = 'Скрипт не изменяет WSUS и не чистит кэш; запуск установки Windows и перезагрузка — только после подтверждения.'
+        TheScriptDoesNot = 'Запуск установки Windows и перезагрузка — только после подтверждения.'
         CtrlCCancelAll = 'Ctrl+C — прервать всю диагностику (включая текущую операцию).'
         FileSystemIntegrityCould = 'Исправность файловой системы не подтверждена.'
         ContinueWithDISMSFC = 'Продолжить DISM/SFC несмотря на состояние диска?'

@@ -759,6 +759,7 @@ try {
     } catch {
         Write-Host ($script:RepairMessages.CouldNotStartThe + $_.Exception.Message) -ForegroundColor Yellow
     }
+    Write-Host ''
 
     $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
     $version = [version]$os.Version

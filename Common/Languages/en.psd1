@@ -203,7 +203,7 @@
         FolderMusic = 'Music'
         FolderVideos = 'Videos'
         Edition0Type1 = 'Edition: {0}; type: {1}'
-        TheScriptDoesNot = 'The script does not modify WSUS or clear caches; Windows Setup and restarts require confirmation.'
+        TheScriptDoesNot = 'Windows Setup and restarts require confirmation.'
         CtrlCCancelAll = 'Ctrl+C — cancel all diagnostics (including the current operation).'
         FileSystemIntegrityCould = 'File-system integrity could not be verified.'
         ContinueWithDISMSFC = 'Continue with DISM/SFC despite the volume state?'
