@@ -1,6 +1,6 @@
 # Repair-Windows
 
-Windows repair diagnostics for **Windows 10/11 and Windows Server 2016+**. `Repair-Windows.ps1` checks the system volume with Repair-Volume/CHKDSK, then runs DISM and SFC and helps select a compatible installation image when the default repair source fails.
+Windows repair diagnostics for **Windows 10/11 and Windows Server 2016+**. `Repair-Windows.ps1` checks the system volume and additional local volumes containing Windows/user known folders, then runs DISM and SFC and helps select a compatible installation image when the default repair source fails.
 
 **English** | [Русский](README.ru.md)
 
@@ -18,7 +18,7 @@ Windows repair diagnostics for **Windows 10/11 and Windows Server 2016+**. `Repa
 
 Right-click `Repair-Windows.ps1` and select **Run with PowerShell**, or invoke `& '.\Repair-Windows.ps1'` from this directory. PSWinKit Common handles UAC and the final pause. The tool writes a PowerShell transcript to `%TEMP%`; native DISM/CBS logs remain under `%windir%\Logs`. Existing legacy `WinRepair_*.log` files remain unchanged.
 
-WinRepair first checks the **system volume** (`%SystemDrive%`, usually `C:`). On Windows 8 / Server 2012 or later it prefers `Repair-Volume -Scan` and can offer `-SpotFix` / `-OfflineScanAndFix`. On Windows 7 / Server 2008 R2, or when the cmdlet is unavailable, it falls back to read-only `chkdsk`. Scheduling a boot-time fix and an immediate reboot each require explicit confirmation. DISM/SFC are postponed if a boot repair is scheduled. `/r` is not run by default.
+WinRepair first checks the **system volume** (`%SystemDrive%`, usually `C:`) and additional local fixed volumes hosting Windows/user known folders, including redirected Downloads. It reports the path that caused each extra volume to be included. If UAC asks for another administrator account, Common captures the initiating user's folders before elevation and passes them to the elevated process; a directly elevated launch uses the current account. The Windows release (e.g. 26H2) is read from the OS `DisplayVersion` value, not guessed from its build. On Windows 8 / Server 2012 or later it prefers `Repair-Volume -Scan` and can offer `-SpotFix` / `-OfflineScanAndFix`. On Windows 7 / Server 2008 R2, or when the cmdlet is unavailable, it falls back to read-only `chkdsk`. Scheduling a boot-time fix and an immediate reboot each require explicit confirmation. DISM/SFC are postponed if a boot repair is scheduled. `/r` is not run by default.
 
 On Windows clients it first runs `DISM /Online /Cleanup-Image /RestoreHealth` using the default repair source. If this fails, it directly prompts the user to mount a Windows ISO and enter its drive letter (for example, `E`), or the full path to `install.wim`/`install.esd`, **without an extra Y/N question**. Enter skips this step and proceeds to SFC. If a selected image also fails, the tool can ask whether to try a different source. Windows Server prompts for an image before the first DISM attempt, allowing Enter to skip it. `SFC /scannow` follows DISM even when DISM fails, unless the operation is canceled.
 

@@ -3,7 +3,7 @@
 WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 - Windows client 8+: first try DISM with default source. Offer ISO/WIM/ESD on failure.
 - Windows Server 2012+: ask for source immediately, but allow default source.
-- Check the system volume before Windows repair (Repair-Volume or CHKDSK).
+- Check the system volume and local volumes hosting known Windows folders before repair (Repair-Volume or CHKDSK).
 - Windows 7 / Server 2008 R2 and earlier: no unsupported RestoreHealth; run SFC.
 - Run SFC even if DISM fails. Offer a safe in-place Windows Setup from selected media on failure.
 - Ctrl+C cancels the script.
@@ -19,6 +19,7 @@ $script:RepairMessages = $utility.Messages
 $script:DiskResult = $null
 $script:SfcResult = $null
 $script:VolumeStatus = $script:RepairMessages.NotChecked
+$script:VolumeChecks = @()
 $script:VolumeNeedsAttention = $false
 $script:VolumeScheduled = $false
 $script:RestartRequested = $false
@@ -420,9 +421,91 @@ function Invoke-RepairVolume {
     & ([scriptblock]::Create($command))
 }
 
+# Read the installed Windows release directly, never infer it from OS build.
+function Get-WindowsRelease {
+    try {
+        $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        return ([string]$cv.DisplayVersion).Trim()
+    } catch { return '' }
+}
+
+# Inspect fixed local volumes hosting Windows folders and the ORIGINAL user's
+# folders as captured by Common before any UAC elevation.
+function Get-RepairVolumes {
+    $candidates = New-Object System.Collections.ArrayList
+    foreach ($entry in @(
+        @{ Name = 'Windows'; Path = [string]$env:SystemRoot }
+        @{ Name = 'ProgramData'; Path = [string]$env:ProgramData }
+        @{ Name = 'Program Files'; Path = [string]$env:ProgramFiles }
+        @{ Name = 'Public'; Path = [string]$env:PUBLIC }
+        @{ Name = 'TEMP'; Path = [string]$env:TEMP }
+    )) { [void]$candidates.Add($entry) }
+    if (${env:ProgramFiles(x86)}) {
+        [void]$candidates.Add(@{ Name = 'Program Files (x86)'; Path = [string]${env:ProgramFiles(x86)} })
+    }
+
+    $labels = @{
+        UserProfile  = $script:RepairMessages.FolderProfile
+        Downloads    = $script:RepairMessages.FolderDownloads
+        Desktop      = $script:RepairMessages.FolderDesktop
+        Documents    = $script:RepairMessages.FolderDocuments
+        Pictures     = $script:RepairMessages.FolderPictures
+        Music        = $script:RepairMessages.FolderMusic
+        Videos       = $script:RepairMessages.FolderVideos
+        RoamingAppData = 'AppData (Roaming)'
+        LocalAppData = 'AppData (Local)'
+        TEMP         = 'TEMP'
+    }
+    $snapshot = $utility.OriginalUserFolders
+    if ($null -ne $snapshot -and $snapshot.Paths -is [Collections.IDictionary]) {
+        foreach ($key in @('UserProfile','Downloads','Desktop','Documents','Pictures','Music','Videos','RoamingAppData','LocalAppData','TEMP')) {
+            $value = [string]$snapshot.Paths[$key]
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                [void]$candidates.Add(@{ Name = [string]$labels[$key]; Path = $value; Prechecked = $true })
+            }
+        }
+    }
+
+    $fixed = @{}
+    try {
+        foreach ($disk in @(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType = 3' -ErrorAction Stop)) {
+            $fixed[([string]$disk.DeviceID).ToUpperInvariant()] = $true
+        }
+    } catch { }
+    if ($fixed.Count -eq 0) {
+        try {
+            foreach ($disk in [IO.DriveInfo]::GetDrives()) {
+                if ($disk.DriveType -eq [IO.DriveType]::Fixed -and $disk.IsReady) {
+                    $fixed[$disk.Name.Substring(0, 2).ToUpperInvariant()] = $true
+                }
+            }
+        } catch { }
+    }
+
+    $volumes = [ordered]@{}
+    $systemDrive = [string]$env:SystemDrive
+    if ($systemDrive -match '^[A-Za-z]:$') {
+        $volumes[$systemDrive.ToUpperInvariant()] = $true
+    }
+    foreach ($candidate in $candidates) {
+        # The original user's environment variables were expanded BEFORE UAC.
+        $path = [string]$candidate.Path
+        if ($path -notmatch '^[A-Za-z]:\\') { continue }
+        if (-not $candidate.Prechecked -and
+            -not (Test-Path -LiteralPath $path -PathType Container -ErrorAction SilentlyContinue)) { continue }
+        $drive = $path.Substring(0, 2).ToUpperInvariant()
+        if (-not $fixed.ContainsKey($drive)) { continue }
+        if (-not $volumes.Contains($drive)) {
+            $volumes[$drive] = $true
+            Write-Host ($script:RepairMessages.VolumeAddedForFolder -f $drive, $candidate.Name, $path) -ForegroundColor Cyan
+        }
+    }
+    return @($volumes.Keys)
+}
+
 function Test-SystemVolume {
-    param([version]$OsVersion)
-    $drive = [string]$env:SystemDrive
+    param([version]$OsVersion, [string]$Drive)
+    $drive = [string]$Drive
     if ($drive -notmatch '^[A-Za-z]:$') {
         $script:VolumeStatus = 'UnknownSystemDrive'
         $script:VolumeNeedsAttention = $true
@@ -667,14 +750,40 @@ try {
     try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
     $profile = Get-OsImageProfile -OperatingSystem $os -Edition $edition -IsServer $isServer
 
-    Write-Host ($script:RepairMessages.OS0Version1 -f $os.Caption, $os.Version)
+    $release = Get-WindowsRelease
+    $osName = ([string]$os.Caption).Trim()
+    if ($release) { $osName = '{0} {1}' -f $osName, $release }
+    Write-Host ($script:RepairMessages.OS0Version1 -f $osName, $os.Version)
     Write-Host ($script:RepairMessages.Edition0Type1 -f $edition, $(if ($isServer) { 'Server' } else { 'Client' }))
     Write-Host $script:RepairMessages.TheScriptDoesNot
     Write-Host $script:RepairMessages.CtrlCCancelAll -ForegroundColor Yellow
 
-    Test-SystemVolume -OsVersion $version
-    $skipWindowsRepair = $script:VolumeScheduled
-    if ($script:VolumeNeedsAttention -and (-not $skipWindowsRepair)) {
+    $anyAttention = $false
+    $anyScheduled = $false
+    $systemNeedsAttention = $false
+    $systemScheduled = $false
+    foreach ($drive in @(Get-RepairVolumes)) {
+        $script:VolumeStatus = $script:RepairMessages.NotChecked
+        $script:VolumeNeedsAttention = $false
+        $script:VolumeScheduled = $false
+        Test-SystemVolume -OsVersion $version -Drive $drive
+        $script:VolumeChecks += [pscustomobject]@{
+            Drive = $drive
+            Status = $script:VolumeStatus
+            NeedsAttention = $script:VolumeNeedsAttention
+            Scheduled = $script:VolumeScheduled
+        }
+        if ($script:VolumeNeedsAttention) { $anyAttention = $true }
+        if ($script:VolumeScheduled) { $anyScheduled = $true }
+        if ($drive -ieq $env:SystemDrive) {
+            $systemNeedsAttention = $script:VolumeNeedsAttention
+            $systemScheduled = $script:VolumeScheduled
+        }
+    }
+    $script:VolumeNeedsAttention = $anyAttention
+    $script:VolumeScheduled = $anyScheduled
+    $skipWindowsRepair = $systemScheduled
+    if ($systemNeedsAttention -and (-not $skipWindowsRepair)) {
         Write-Host $script:RepairMessages.FileSystemIntegrityCould -ForegroundColor Yellow
         if (-not (Ask-YesNo $script:RepairMessages.ContinueWithDISMSFC $false)) {
             $skipWindowsRepair = $true
@@ -724,7 +833,10 @@ try {
     }
     Write-Host ''
     Write-Host $script:RepairMessages.SUMMARY -ForegroundColor Cyan
-    Write-Host ($script:RepairMessages.SystemVolume + $script:VolumeStatus)
+    Write-Host $script:RepairMessages.CheckedVolumes
+    foreach ($check in $script:VolumeChecks) {
+        Write-Host ('  {0} {1}' -f $check.Drive, $check.Status)
+    }
     if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup -ForegroundColor Yellow }
     if ($null -ne $script:DiskResult) {
         Write-Host ('DISM: ' + (Format-ExitCode $script:DiskResult))

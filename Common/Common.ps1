@@ -143,6 +143,67 @@ function Test-PSWinKitUacCancelled {
     return $false
 }
 
+# Capture known user folders while HKCU and environment belong to the user
+# who INITIATED the utility, before a possible UAC credential switch.
+function Get-PSWinKitUserFolderSnapshot {
+    $paths = @{}
+    $sid = ''
+    try { $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { }
+    $special = @{
+        UserProfile = 'UserProfile'
+        Desktop = 'Desktop'
+        Documents = 'MyDocuments'
+        Pictures = 'MyPictures'
+        Music = 'MyMusic'
+        Videos = 'MyVideos'
+        RoamingAppData = 'ApplicationData'
+        LocalAppData = 'LocalApplicationData'
+    }
+    foreach ($key in $special.Keys) {
+        try {
+            $value = [Environment]::GetFolderPath([Environment+SpecialFolder]([string]$special[$key]))
+            if (-not [string]::IsNullOrWhiteSpace($value) -and
+                (Test-Path -LiteralPath $value -PathType Container -ErrorAction SilentlyContinue)) {
+                $paths[$key] = [string]$value
+            }
+        } catch { }
+    }
+    if (-not $paths.ContainsKey('UserProfile') -and $env:USERPROFILE -and
+        (Test-Path -LiteralPath $env:USERPROFILE -PathType Container -ErrorAction SilentlyContinue)) {
+        $paths['UserProfile'] = [string]$env:USERPROFILE
+    }
+    if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP -PathType Container -ErrorAction SilentlyContinue)) {
+        $paths['TEMP'] = [string]$env:TEMP
+    }
+
+    # Downloads has no Environment.SpecialFolder entry. The registry is also
+    # a fallback when another Known Folder is not available through .NET.
+    $registryNames = @{
+        Downloads = '{374DE290-123F-4565-9164-39C4925E467B}'
+        Desktop = 'Desktop'
+        Documents = 'Personal'
+        Pictures = 'My Pictures'
+        Music = 'My Music'
+        Videos = 'My Video'
+        RoamingAppData = 'AppData'
+        LocalAppData = 'Local AppData'
+    }
+    try {
+        $userFolders = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop
+        foreach ($key in $registryNames.Keys) {
+            if ($paths.ContainsKey($key)) { continue }
+            $value = [string]$userFolders.($registryNames[$key])
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $expanded = [Environment]::ExpandEnvironmentVariables($value)
+                if (Test-Path -LiteralPath $expanded -PathType Container -ErrorAction SilentlyContinue) {
+                    $paths[$key] = $expanded
+                }
+            }
+        }
+    } catch { }
+    return @{ SID = $sid; Paths = $paths }
+}
+
 function Start-Utility {
     [CmdletBinding()]
     param(
@@ -170,8 +231,10 @@ function Start-Utility {
     # Internal values are set only by the elevated launch command, not script parameters.
     $inheritedLanguage = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_LANGUAGE')
     $inheritedElevation = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_ELEVATED')
+    $inheritedUserFolders = [Environment]::GetEnvironmentVariable('PSWINKIT_INTERNAL_USER_FOLDERS')
     [Environment]::SetEnvironmentVariable('PSWINKIT_INTERNAL_LANGUAGE', $null, 'Process')
     [Environment]::SetEnvironmentVariable('PSWINKIT_INTERNAL_ELEVATED', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('PSWINKIT_INTERNAL_USER_FOLDERS', $null, 'Process')
     if (-not $LanguageFile -and $inheritedLanguage) { $LanguageFile = $inheritedLanguage }
 
     $explicitLanguage = -not [string]::IsNullOrEmpty($LanguageFile)
@@ -202,6 +265,9 @@ function Start-Utility {
         $args64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($xml))
         $path64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptFile))
         $lang64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($selectedFile))
+        $originalUserFolders = Get-PSWinKitUserFolderSnapshot
+        $foldersXml = [Management.Automation.PSSerializer]::Serialize($originalUserFolders)
+        $folders64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($foldersXml))
         $code = @"
 `$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$args64'))
 `$raw = [Management.Automation.PSSerializer]::Deserialize(`$payload)
@@ -210,6 +276,7 @@ if (-not (`$raw -is [Collections.IDictionary])) { throw 'Invalid PSWinKit UAC ar
 foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
 `$env:PSWINKIT_INTERNAL_LANGUAGE = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$lang64'))
 `$env:PSWINKIT_INTERNAL_ELEVATED = '1'
+`$env:PSWINKIT_INTERNAL_USER_FOLDERS = '$folders64'
 `$scriptFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$path64'))
 & `$scriptFile @arguments
 "@
@@ -238,6 +305,24 @@ foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
         return $null
     }
 
+    # Only a relaunch made by Start-Utility has the original user's snapshot.
+    # A directly elevated launch uses the currently logged-on account instead.
+    if ($inheritedElevation -eq '1') {
+        if ([string]::IsNullOrEmpty($inheritedUserFolders)) {
+            throw 'Original user folder context was not passed through UAC.'
+        }
+        try {
+            $folderXml = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($inheritedUserFolders))
+            $originalUserFolders = [Management.Automation.PSSerializer]::Deserialize($folderXml)
+            if (-not ($originalUserFolders -is [Collections.IDictionary]) -or
+                -not ($originalUserFolders.Paths -is [Collections.IDictionary])) {
+                throw 'Invalid original user folder context.'
+            }
+        } catch { throw ('Unable to restore original user folders: ' + $_.Exception.Message) }
+    } else {
+        $originalUserFolders = Get-PSWinKitUserFolderSnapshot
+    }
+
     # The actual worker owns both clocks. UAC waiting is not included in duration.
     $startedAt = Get-Date
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -251,6 +336,7 @@ foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
         Messages       = $utilityMessages
         CommonMessages = $commonMessages
         PauseOnExit     = $pause
+        OriginalUserFolders = $originalUserFolders
     }
     Write-Host ('=== {0} ===' -f [string]$utilityMessages['Title']) -ForegroundColor Cyan
     Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'Started' -Values @((Format-PSWinKitDateTime $startedAt))) -ForegroundColor Gray
