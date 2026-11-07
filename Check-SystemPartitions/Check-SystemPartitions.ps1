@@ -293,7 +293,7 @@ function Show-Partitions($records, [string]$title = '', [bool]$showFootnote = $t
     $width = 150
     try { $width = [math]::Max(110, [int]$Host.UI.RawUI.WindowSize.Width) } catch { }
     Write-Host (($tableRows | Format-Table -Wrap -AutoSize | Out-String -Width $width).TrimEnd())
-    # A footnote is printed only when an EFI relocation recommendation is present.
+    # A footnote clarifies that an EFI partition after C: need not be relocated.
     if ($showFootnote -and
         @($records | Where-Object { $_.Kind -eq 'EFI' -and $_.Recommendation -eq $m.CSRecommendEFIAfterC }).Count -gt 0) {
         Write-Host ''
@@ -767,7 +767,7 @@ try {
         Write-Host $m.CSPlanNoActions
     }
     if (@($rows | Where-Object { $_.Kind -eq 'EFI' -and $_.Recommendation -eq $m.CSRecommendEFIAfterC }).Count -gt 0) {
-        Write-Host $m.CSPlanManualEFI -ForegroundColor Yellow
+        Write-Host $m.CSPlanManualEFI -ForegroundColor DarkGray
     }
     $selectedAudits = @($candidateAudits | Where-Object {
         [int]$_.Number -in $selected.ToArray()

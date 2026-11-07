@@ -9,6 +9,9 @@
         CSExecApplyingTitle = 'Changing C: and rebuilding the active Recovery partition'
         CS284RecommendIncreaseRecovery = 'Increase Recovery free space for Windows RE updates'
         CSPlanLeftOfC = 'Before C: freed space cannot be added to C: without moving its beginning.'
+        CSRecommendEFIAfterC = 'EFI after Windows; relocation is optional *'
+        CSEfiFootnote = 'EFI need not be at the beginning of the disk; this utility does not relocate it.'
+        CSPlanManualEFI = 'EFI after Windows is valid. Relocation is optional and is not performed by this utility.'
 
         CS27ReadOnlyUntilConfirm = 'Diagnostic phase: no partitions are modified until all prechecks and final confirmation have passed.'
         CS27ExecutionRisk = 'DISK CHANGES. Do not proceed without a restorable full-disk backup.'
@@ -96,6 +99,9 @@
         CSExecApplyingTitle = 'Изменение C: и пересоздание Recovery'
         CS284RecommendIncreaseRecovery = 'Увеличить свободное пространство Recovery для обновлений Windows RE'
         CSPlanLeftOfC = 'Перед C: освободившееся пространство нельзя присоединить к C: без перемещения начала раздела.'
+        CSRecommendEFIAfterC = 'EFI после Windows; перенос необязателен *'
+        CSEfiFootnote = 'EFI не обязательно располагать в начале диска; утилита не выполняет его перенос.'
+        CSPlanManualEFI = 'EFI после Windows — допустимое расположение. Перенос необязателен и утилитой не выполняется.'
 
         CS27ReadOnlyUntilConfirm = 'Этап диагностики: разделы не изменяются до успешных проверок и окончательного подтверждения.'
         CS27ExecutionRisk = 'ИЗМЕНЕНИЕ РАЗДЕЛОВ. Не продолжайте без восстанавливаемой резервной копии всего диска.'
