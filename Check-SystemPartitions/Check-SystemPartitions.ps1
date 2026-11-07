@@ -1,30 +1,32 @@
 ﻿#Requires -Version 5.1
-# Check-SystemPartitions — Stage 2.3: saved hidden/system Winre.wim size check fixed; execution disabled.
-# Read-only by default; -Preflight checks files. -Execute DISABLED in Stage 2.3.
-# The existing Repair-WinRE remains the supported repair implementation.
+# Check-SystemPartitions — interactive system partition diagnostics and repair.
+# GPT/NTFS modifications require per-operation selection, prechecks and final confirmation.
+# Standard PSWinKit common parameters are optional; no mode switches are needed.
 
 [CmdletBinding()]
-param([switch]$Preflight, [switch]$Execute)
+param(
+    [string]$LanguageFile,
+    [switch]$PauseOnExit
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-if ($Preflight -and $Execute) { throw 'Specify -Preflight or -Execute, not both.' }
-if ($Preflight -or $Execute) {
-    # Start-Utility elevation relaunch does not preserve our custom switches.
-    # Require an already-elevated console rather than silently lose the mode.
-    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw 'Run the -Preflight or -Execute mode from an elevated Windows PowerShell console.'
-    }
-}
 
 
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
-$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
+$utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator `
+    -LanguageFile $LanguageFile -PauseOnExit:$PauseOnExit
 if ($null -eq $utility) { return }
 $m = $utility.Messages
 . (Join-Path $PSScriptRoot 'Execution.ps1')
-if ($Execute) { throw $m.CSExecExecuteDisabled }
+. (Join-Path $PSScriptRoot 'Planning.ps1')
+. (Join-Path $PSScriptRoot 'Cleanup.ps1')
+# Supplemental localized messages are shipped in this folder so that the ZIP
+# can be copied directly without overwriting user-maintained Common/Languages.
+$localMessages = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'Execution.Messages.psd1') -ErrorAction Stop
+$locale = if ($utility.Language -match '(?i)^ru($|[-_])') { 'ru' } else { 'en' }
+foreach ($entry in $localMessages[$locale].GetEnumerator()) { $m[[string]$entry.Key] = [string]$entry.Value }
+
 
 $script:MiB = [int64]1048576
 $script:GiB = [int64]1073741824
@@ -446,9 +448,60 @@ function Read-YesNo([string]$prompt) {
     }
 }
 
+
+# Read back actual state after successful steps and any optional deletions.
+# Do not infer success from old partition numbers: Windows may renumber on reboot.
+function Show-CSFinalSummary {
+    param($OriginalDisk, $OriginalC, $CleanupAudits)
+
+    $liveDisk = Get-Disk -Number ([int]$OriginalDisk.Number) -ErrorAction Stop
+    if ([string]$liveDisk.UniqueId -ne [string]$OriginalDisk.UniqueId) {
+        throw $m.CSExecLayoutChanged
+    }
+    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+    if ([int]$liveC.DiskNumber -ne [int]$OriginalDisk.Number -or
+        [int64]$liveC.Offset -ne [int64]$OriginalC.Offset) {
+        throw $m.CSExecLayoutChanged
+    }
+    $liveParts = @(Get-Partition -DiskNumber ([int]$liveDisk.Number) -ErrorAction Stop | Sort-Object Offset)
+    $liveRE = Get-WinReSnapshot
+    $liveActive = Get-ActiveRecovery $liveParts $liveRE ([int]$liveDisk.Number) ([string]$liveDisk.PartitionStyle)
+    $liveCVolume = Get-Volume -DriveLetter C -ErrorAction Stop
+
+    Write-Host ''
+    Write-Host ('=== ' + $m.CSFinalTitle + ' ===') -ForegroundColor Cyan
+    Write-Host ($m.CSFinalC -f (Format-ExplorerCapacity ([int64]$liveCVolume.Size)))
+    if ($null -ne $liveActive) {
+        $reVolume = Get-Volume -Partition $liveActive -ErrorAction Stop
+        Write-Host ($m.CSFinalRE -f $liveActive.PartitionNumber,
+            (Format-ExactMiB ([int64]$liveActive.Size)),
+            (Format-ExactMiB ([int64]$reVolume.SizeRemaining)))
+        if ([int64]$reVolume.SizeRemaining -lt [int64]250MB) {
+            Write-Host $m.CSFinalFreeWarning -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host $m.CSFinalREUnknown -ForegroundColor Yellow
+    }
+    $enabledText = if ($liveRE.Enabled) { $m.CSWinREEnabled } else { $m.CSWinREDisabled }
+    Write-Host ($m.CSFinalREState -f $enabledText)
+    foreach ($audit in @($CleanupAudits | Where-Object { $null -ne $_ })) {
+        $remaining = @($liveParts | Where-Object {
+            [string]$_.Guid -eq [string]$audit.PartitionGuid -and
+            [int64]$_.Offset -eq [int64]$audit.Offset
+        })
+        $status = if ($remaining.Count -eq 0) { $m.CSFinalRemoved } else { $m.CSFinalRetained }
+        Write-Host ($m.CSFinalOptional -f $audit.Number, $status)
+    }
+    Write-Host $m.CSFinalReboot -ForegroundColor DarkGray
+
+    $liveRows = @(New-PartitionRows $liveDisk $liveC $liveParts $liveRE `
+        (Get-UsableDiskBounds $liveDisk $liveParts) (Get-VolumeSizeMap $liveParts))
+    Show-Partitions $liveRows $m.CSFinalLayoutTitle
+}
+
 try {
     Import-Module Storage -ErrorAction Stop
-    if ($Execute) { Write-Host $m.CSExecModeWarning -ForegroundColor Yellow }
+    Write-Host $m.CSFinalInteractiveWarning -ForegroundColor Yellow
     if ($env:SystemDrive -ine 'C:') { throw $m.OnlyC }
     $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).CurrentBuildNumber
     if ($build -lt 14393) { throw $m.OsTooOld }
@@ -458,11 +511,13 @@ try {
     $parts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop | Sort-Object Offset)
     $usableBounds = Get-UsableDiskBounds $disk $parts
     $reInfo = Get-WinReSnapshot
+    # Offer cleanup of abandoned, old protected staging folders at EVERY launch.
+    # Never remove them without an explicit Y; cleanup is separate from disk work.
+    Invoke-CSOfferOldStagingCleanup -WinReEnabled:([bool]$reInfo.Enabled)
     $volumeSizes = Get-VolumeSizeMap $parts
     $rows = @(New-PartitionRows $disk $c $parts $reInfo $usableBounds $volumeSizes)
     $activeRecovery = Get-ActiveRecovery $parts $reInfo ([int]$disk.Number) ([string]$disk.PartitionStyle)
 
-    Write-Host ''
     Write-Host ('=== ' + $m.CSAnalysisTitle + ' ===') -ForegroundColor Cyan
     Write-Host ($m.CSInfoDisk -f $disk.Number, $disk.PartitionStyle, (Format-PartitionSize ([int64]$disk.Size)))
     $reText = if ($reInfo.Enabled) { $m.CSWinREEnabled } else { $m.CSWinREDisabled }
@@ -478,21 +533,40 @@ try {
     }
     Write-Host ($m.CSInfoRe -f $reText, $reSuffix)
 
-    # Explorer truncates filesystem capacity rather than partition geometry.
+    # Assess the *source image* BEFORE offering any size recommendation. At this
+    # stage Windows RE is read/validated in place; no WIM is copied to staging.
+    Write-Host ''
+    Write-Host ('=== ' + $m.CS26ImageTitle + ' ===') -ForegroundColor Cyan
+    Write-Host $m.CS26ImageChecking -ForegroundColor DarkGray
+    $assessment = Get-CSImageAssessment $disk $c $parts $reInfo $activeRecovery
     $vol = $null
     try { $vol = Get-Volume -DriveLetter C -ErrorAction Stop } catch { }
-    $proposal = Get-CRoundProposal $c $vol
-    $geometryCandidate = $null
-    if ($null -ne $proposal -and $null -ne $activeRecovery) {
-        $geometryCandidate = Get-RebuildPreview $disk $c $parts $activeRecovery ([int64]$proposal.TargetPartitionBytes)
+    if ($assessment.Verified) {
+        Write-Host ($m.CS26ImageSource -f $assessment.Source)
+        Write-Host ($m.CS26ImageSize -f (Format-ExactMiB $assessment.WIMBytes))
+        if ($null -ne $assessment.FreeBytes) {
+            Write-Host ($m.CS26CurrentFree -f (Format-ExactMiB ([int64]$assessment.FreeBytes)))
+        }
+        Write-Host ($m.CS26MinimumSize -f (Format-ExactMiB ([int64]$assessment.MinRecoveryBytes)))
+        Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
+    } else {
+        Write-Host ($m.CS26ImageUnavailable -f $assessment.Error) -ForegroundColor Yellow
     }
+    $proposal = Get-CSPlanningDecision $disk $c $parts $reInfo $activeRecovery `
+        $assessment $vol $usableBounds
+    $geometryCandidate = if ($null -ne $proposal) { $proposal.Geometry } else { $null }
     $canPreviewC = ($null -ne $geometryCandidate -and $geometryCandidate.IsGeometryPossible)
     $cRow = @($rows | Where-Object { $_.Kind -eq 'Windows' } | Select-Object -First 1)
-    if ($cRow.Count -eq 1 -and $null -ne $proposal) {
-        if ($canPreviewC) {
+    if ($cRow.Count -eq 1 -and $canPreviewC) {
+        if ($proposal.Beauty) {
             $cRow[0].Recommendation = $m.CSRecommendRoundCWithRE -f $proposal.TargetExplorerGiB
-        } else {
-            $cRow[0].Recommendation = $m.CSRecommendRoundCUnverified -f $proposal.TargetExplorerGiB
+        } elseif ($proposal.MustRepair) {
+            if ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
+                [int64]$assessment.FreeBytes -lt $script:CSFreeReserve) {
+                $cRow[0].Recommendation = $m.CS284RecommendIncreaseRecovery
+            } else {
+                $cRow[0].Recommendation = $m.CS26RecommendationRepair
+            }
         }
     }
     Show-Partitions $rows
@@ -500,7 +574,7 @@ try {
         Write-Host $m.CSGptBoundsUnavailable -ForegroundColor Yellow
     }
     Write-Host ''
-    Write-Host $m.CSReadOnlyNotice -ForegroundColor DarkGray
+    Write-Host $m.CS27ReadOnlyUntilConfirm -ForegroundColor Yellow
     if ($null -eq $vol) { Write-Host $m.CSPlanNoCapacity -ForegroundColor Yellow }
     if ($reInfo.Enabled -and $null -eq $activeRecovery) { Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow }
     if (-not $reInfo.Enabled) { Write-Host $m.CSWinRERepairNeeded -ForegroundColor Yellow }
@@ -508,23 +582,60 @@ try {
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false
     $candidates = @($rows | Where-Object { Test-DeletionCandidate $_ })
+    # Inspect every suspicious partition BEFORE it can be selected.
+    # The audit is read-only. A partition with unknown/OEM contents is blocked
+    # from optional deletion, even when the user selects it for simulation.
+    $candidateAudits = @()
+    if ($candidates.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CS28AuditTitle + ' ===') -ForegroundColor Cyan
+        foreach ($row in $candidates) {
+            $part = @($parts | Where-Object { [int]$_.PartitionNumber -eq [int]$row.PartitionNumber })
+            if ($part.Count -ne 1) { throw $m.CSExecLayoutChanged }
+            $audit = Get-CSCleanupCandidateAudit $disk $c $part[0] $row.Kind $reInfo
+            $candidateAudits += $audit
+            Show-CSCleanupCandidateAudit $audit
+        }
+        Write-Host $m.CS28AuditDisclaimer -ForegroundColor Yellow
+    }
     $hasChoices = ($canPreviewC -or $candidates.Count -gt 0)
     if ($hasChoices) {
         Write-Host ''
         Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
-        Write-Host $m.CSPlanSimulationNotice -ForegroundColor Yellow
-        # One global gate, followed by one C:/Recovery choice and optional
-        # individually reviewable candidate removals. No executor exists here.
-        if (Read-YesNo $m.CSAskSimulation) {
+        Write-Host $m.CS27ExecuteSelectionNotice -ForegroundColor Yellow
+        # One global gate, followed by the core repair choice and individually
+        # audited optional deletion choices. Each destructive action is reconfirmed.
+        if (Read-YesNo $m.CS284AskExecute) {
             if ($canPreviewC) {
-                $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
+                if ($null -eq $activeRecovery) {
+                    $optimiseC = Read-YesNo $m.CS26AskMissingRecovery
+                } elseif ($proposal.Beauty) {
+                    $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
+                } else {
+                    if ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
+                    [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
+                    [int64]$proposal.ChangeBytes -lt 0) {
+                    $optimiseC = Read-YesNo ($m.CS284AskIncreaseRecovery -f
+                        (Format-ExactMiB ([int64]$proposal.Geometry.NewSize)),
+                        (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes))))
+                } else {
+                    $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
+                }
+                }
             }
             foreach ($candidate in $candidates) {
                 $details = @()
                 if (-not [string]::IsNullOrWhiteSpace($candidate.Name)) { $details += $candidate.Name }
                 $details += $candidate.Size
                 $details += $candidate.Role
-                if (Read-YesNo ($m.CSAskPartition -f $candidate.PartitionNumber, ($details -join ', '))) {
+                $candidateAudit = @($candidateAudits | Where-Object {
+                    [int]$_.Number -eq [int]$candidate.PartitionNumber
+                })
+                if ($candidateAudit.Count -ne 1 -or -not $candidateAudit[0].Permitted) {
+                    Write-Host ($m.CS28BlockedSelection -f $candidate.PartitionNumber) -ForegroundColor Yellow
+                    continue
+                }
+                if (Read-YesNo ($m.CS284AskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
                     $selected.Add([int]$candidate.PartitionNumber)
                 }
             }
@@ -534,7 +645,8 @@ try {
     }
 
     Write-Host ''
-    Write-Host ('=== ' + $m.CSPlanTitle + ' ===') -ForegroundColor Cyan
+    $planTitle = $m.CS284PlanTitleExecute
+    Write-Host ('=== ' + $planTitle + ' ===') -ForegroundColor Cyan
     $anyAction = $false
     $plannedCSize = [int64]$c.Size
     $rebuildGeometry = $null
@@ -546,13 +658,28 @@ try {
         $operation = if ($proposal.ChangeBytes -gt 0) { $m.CSPlanGrow } else { $m.CSPlanShrink }
         # The active Recovery is temporary removed/recreated only as part
         # of THIS combined operation, never an independent deletion choice.
-        Write-Host ($m.CSPlanCWithRE -f $operation, $changeLabel, $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
-        Write-Host ($m.CSPlanRebuildRE -f $activeRecovery.PartitionNumber,
-            (Format-ExactMiB $rebuildGeometry.OldSize), (Format-ExactMiB $rebuildGeometry.NewSize))
+        if ($null -eq $activeRecovery) {
+            Write-Host ($m.CS26PlanCreate -f (Format-ExactMiB $proposal.MinimumRecoveryBytes))
+            if ($proposal.ChangeBytes -ne 0) {
+                Write-Host ($m.CS26PlanCChange -f $operation, $changeLabel)
+            }
+        } else {
+            if ($proposal.Beauty) {
+                Write-Host ($m.CSPlanCWithRE -f $operation, $changeLabel, $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
+            } elseif ($proposal.ChangeBytes -eq 0) {
+                Write-Host ($m.CS26PlanRebuildOnly -f $activeRecovery.PartitionNumber)
+            } else {
+                Write-Host ($m.CS26PlanTechnical -f $operation, $changeLabel, $activeRecovery.PartitionNumber)
+            }
+            Write-Host ($m.CSPlanRebuildRE -f $activeRecovery.PartitionNumber,
+                (Format-ExactMiB $rebuildGeometry.OldSize), (Format-ExactMiB $rebuildGeometry.NewSize))
+        }
         if ([int64]$rebuildGeometry.AbsorbedGapBytes -gt 0) {
             Write-Host ($m.CSPlanAbsorbGap -f (Format-FreeSpaceSize ([int64]$rebuildGeometry.AbsorbedGapBytes))) -ForegroundColor DarkGray
         }
-        if ($proposal.ChangeBytes -gt 0) {
+        if ($null -eq $activeRecovery) {
+            Write-Host $m.CS26MissingExecutionUnsupported -ForegroundColor Yellow
+        } elseif ($proposal.ChangeBytes -gt 0) {
             Write-Host $m.CSPlanOrderGrow
         } else {
             Write-Host $m.CSPlanOrderShrink
@@ -580,6 +707,10 @@ try {
             $record = @($rows | Where-Object { $_.PartitionNumber -eq $n } | Select-Object -First 1)
             if ($record.Count -eq 1) {
                 Write-Host ($m.CSPlanCandidateDeletion -f $n, $record[0].Role) -ForegroundColor Yellow
+                $selectedAudit = @($candidateAudits | Where-Object { [int]$_.Number -eq [int]$n })
+                if ($selectedAudit.Count -ne 1 -or -not $selectedAudit[0].Permitted) {
+                    Write-Host ('  ' + $m.CS282BlockedSimulation) -ForegroundColor Red
+                }
                 $side = if ($record[0].Offset -lt [int64]$c.Offset) { $m.CSPlanLeftOfC } else {
                     $m.CSPlanNotAdjacentC
                 }
@@ -592,6 +723,16 @@ try {
         Write-Host $m.CSPreviewCalculating -ForegroundColor DarkGray
         $excluded = @($selected.ToArray())
         $projectedParts = @(New-ProjectedLayout $parts $c $activeRecovery $plannedCSize $rebuildGeometry $excluded)
+        if ($optimiseC -and $null -eq $activeRecovery -and $null -ne $rebuildGeometry) {
+            # Synthetic partition for display ONLY. Number 0 signifies new.
+            $newRecovery = [pscustomobject]@{
+                PartitionNumber = 0; Offset = [int64]$rebuildGeometry.NewStart
+                Size = [int64]$rebuildGeometry.NewSize; DriveLetter = $null
+                Type = 'Recovery'; GptType = ('{' + $script:RecoveryGuid + '}')
+                MbrType = ''; IsBoot = $false; IsSystem = $false; IsActive = $false
+            }
+            $projectedParts = @($projectedParts + @($newRecovery) | Sort-Object Offset)
+        }
         $projectedC = @($projectedParts | Where-Object { [int]$_.PartitionNumber -eq [int]$c.PartitionNumber } | Select-Object -First 1)
         if ($projectedC.Count -ne 1) { throw 'Projected Windows partition is missing.' }
         $previewBounds = Get-PreviewBounds $usableBounds $parts
@@ -607,6 +748,15 @@ try {
                 [int64]$previewVolumeSizes[$cKey] + $plannedCSize - [int64]$c.Size)
         }
         $simulatedRows = @(New-PartitionRows $disk $projectedC[0] $projectedParts $reInfo $previewBounds $previewVolumeSizes)
+        if ($optimiseC -and $null -eq $activeRecovery) {
+            foreach ($row in $simulatedRows) {
+                if ($row.Kind -eq 'RecoveryOther' -and [int]$row.PartitionNumber -eq 0) {
+                    $row.Recommendation = ''
+                    $row.Number = '+'
+                    $row.Role = $m.CS26NewRecovery
+                }
+            }
+        }
         Show-Partitions $simulatedRows $m.CSSimulationLayoutTitle $false
         Write-Host ''
         Write-Host $m.CSSimulationLayoutNotice -ForegroundColor Yellow
@@ -619,25 +769,43 @@ try {
     if (@($rows | Where-Object { $_.Kind -eq 'EFI' -and $_.Recommendation -eq $m.CSRecommendEFIAfterC }).Count -gt 0) {
         Write-Host $m.CSPlanManualEFI -ForegroundColor Yellow
     }
-    if ($Execute -or $Preflight) {
-        if (-not $optimiseC) {
-            Write-Host $m.CSExecNoPlan -ForegroundColor Yellow
-        } elseif ($selected.Count -gt 0 -and $Execute) {
-            # The execution branch must never interpret a diagnostic selection as approval.
-            Write-Host $m.CSExecRemoveSelection -ForegroundColor Yellow
-        } else {
-            # Preflight validates ONLY the C:/active-Recovery plan. Other candidates
-            # remain in the read-only preview and are ignored by the executor.
-            if ($selected.Count -gt 0) {
-                Write-Host $m.CSExecOtherSelectionsIgnored -ForegroundColor Yellow
-            }
+    $selectedAudits = @($candidateAudits | Where-Object {
+        [int]$_.Number -in $selected.ToArray()
+    })
+    # Never begin mutation if any selected optional deletion failed its audit.
+    $invalid = @($selectedAudits | Where-Object { -not $_.Permitted })
+    if ($selectedAudits.Count -ne $selected.Count -or $invalid.Count -gt 0) {
+        Write-Host $m.CS28BlockedExecutionSelection -ForegroundColor Red
+    } elseif ($optimiseC -and $null -eq $activeRecovery) {
+        # A missing or unregistered Recovery has only a diagnostic preview.
+        Write-Host $m.CS26MissingExecutionUnsupported -ForegroundColor Yellow
+    } else {
+        $coreSucceeded = $false
+        if ($optimiseC) {
             Invoke-CSCRecoveryExecution -Disk $disk -C $c -Parts $parts `
                 -ActiveRecovery $activeRecovery -ReInfo $reInfo -Proposal $proposal `
-                -RebuildGeometry $rebuildGeometry -PreflightOnly:$Preflight
+                -RebuildGeometry $rebuildGeometry
+            $coreSucceeded = [bool]$script:CSExecLastSucceeded
+        } elseif ($selectedAudits.Count -gt 0) {
+            # Optional cleanup can be performed without rebuilding active Recovery.
+            $coreSucceeded = $true
+        } else {
+            Write-Host $m.CSExecNoPlan -ForegroundColor Green
         }
-    } else {
-        Write-Host $m.CSPlanNotExecutable -ForegroundColor DarkGray
-        Write-Host $m.CSNoExecution -ForegroundColor Green
+        if ($coreSucceeded -and $selectedAudits.Count -gt 0) {
+            Write-Host ''
+            Write-Host ('=== ' + $m.CS28ExecuteTitle + ' ===') -ForegroundColor Yellow
+            Invoke-CSOptionalPartitionDeletion -disk $disk -c $c -audits $selectedAudits `
+                -BackupAlreadyConfirmed:$optimiseC
+        }
+        if ($coreSucceeded) {
+            try {
+                Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
+                    -CleanupAudits $selectedAudits
+            } catch {
+                Write-Warning ($m.CSFinalReadbackFailed -f $_.Exception.Message)
+            }
+        }
     }
 }
 catch {

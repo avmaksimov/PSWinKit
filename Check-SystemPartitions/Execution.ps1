@@ -1,15 +1,85 @@
 ﻿#Requires -Version 5.1
-# Check-SystemPartitions execution module (Stage 2.5). Loaded by Check-SystemPartitions.ps1.
+# Check-SystemPartitions execution module. Loaded by Check-SystemPartitions.ps1.
 # This module NEVER runs any disk changes when dot-sourced.
 # Supported execution scenario: GPT, C: NTFS, active WinRE Recovery directly after C:.
 
 $script:CSExecMutated = $false
+$script:CSExecLastSucceeded = $false
 $script:CSExecStaging = $null
 $script:CSExecMount = $null
 $script:CSExecMountPart = $null
 $script:CSExecMountAttached = $false
 $script:CSExecCurrentVolumeSize = $null
 $script:CSExecCurrentVolumeFree = $null
+
+# Stage directories can remain after a crash or a failed destructive operation.
+# Never delete an arbitrary path or a directory containing reparse points.
+function Test-CSStagingTreeSafe([string]$path) {
+    if (-not [IO.Directory]::Exists($path)) { return $false }
+    $pending = [System.Collections.Generic.Stack[string]]::new()
+    $pending.Push([IO.Path]::GetFullPath($path))
+    while ($pending.Count -gt 0) {
+        $dir = $pending.Pop()
+        $d = [IO.DirectoryInfo]::new($dir)
+        if (($d.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        foreach ($file in [IO.Directory]::GetFileSystemEntries($dir)) {
+            $attributes = [IO.File]::GetAttributes($file)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) { $pending.Push($file) }
+        }
+    }
+    return $true
+}
+
+function Get-CSStagingTreeSize([string]$path) {
+    [int64]$bytes = 0
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($path)
+    while ($stack.Count -gt 0) {
+        foreach ($item in [IO.Directory]::GetFileSystemEntries($stack.Pop())) {
+            $attrib = [IO.File]::GetAttributes($item)
+            if (($attrib -band [IO.FileAttributes]::Directory) -ne 0) { $stack.Push($item) }
+            else { $bytes += [int64]([IO.FileInfo]::new($item)).Length }
+        }
+    }
+    return $bytes
+}
+
+function Invoke-CSOfferOldStagingCleanup([switch]$WinReEnabled) {
+    $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
+    if (-not [IO.Directory]::Exists($base)) { return }
+    # The root must itself be an ordinary directory (not a junction).
+    if (((Get-Item -LiteralPath $base -Force -ErrorAction Stop).Attributes -band
+        [IO.FileAttributes]::ReparsePoint) -ne 0) { throw $m.CS27CleanupUnsafeRoot }
+    $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
+        Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' -and
+            $_.LastWriteTime -lt (Get-Date).AddMinutes(-30) })
+    if ($dirs.Count -eq 0) { return }
+    Write-Host ''
+    Write-Host $m.CS27OldStageTitle -ForegroundColor Yellow
+    foreach ($dir in $dirs) {
+        if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
+            Write-Host ($m.CS27OldStageUnsafe -f $dir.FullName) -ForegroundColor Red
+            return
+        }
+        $size = Get-CSStagingTreeSize $dir.FullName
+        Write-Host ($m.CS27OldStageRow -f $dir.Name, $dir.CreationTime,
+            (Format-PartitionSize $size))
+    }
+    if (-not $WinReEnabled) {
+        Write-Host $m.CS27OldStageKeep -ForegroundColor Yellow
+        return
+    }
+    Write-Host $m.CS27OldStageWarning -ForegroundColor Yellow
+    if (-not (Read-YesNo $m.CS27OldStageDeleteQuestion)) { return }
+    foreach ($dir in $dirs) {
+        if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
+            throw $m.CS27CleanupUnsafeRoot
+        }
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
+    }
+    Write-Host ($m.CS27OldStageDeleted -f $dirs.Count) -ForegroundColor Green
+}
 
 function Assert-CSPendingRebootClear {
     foreach ($key in @(
@@ -334,8 +404,11 @@ function Invoke-CSExternal([string]$file, [string[]]$arguments) {
 
 function Invoke-CSCRecoveryExecution {
     param($Disk, $C, $Parts, $ActiveRecovery, $ReInfo, $Proposal, $RebuildGeometry, [switch]$PreflightOnly)
-    if (-not $PreflightOnly) { throw $m.CSExecExecuteDisabled }
+    if (-not $PreflightOnly) {
+        Write-Host $m.CS27ExecutionRisk -ForegroundColor Red
+    }
     $script:CSExecMutated = $false
+    $script:CSExecLastSucceeded = $false
     $script:CSExecStaging = $null
     $script:CSExecMount = $null
     $script:CSExecMountAttached = $false
@@ -358,6 +431,7 @@ function Invoke-CSCRecoveryExecution {
         Assert-CSExecutionPreflight $Disk $C $Parts $ActiveRecovery $ReInfo $Proposal $RebuildGeometry
         Assert-CSLayoutUnchanged $Disk $snapshot
         $stageWim = Save-CSWim $Disk $ActiveRecovery
+        $stagedWimHash = Get-CSFileSha256 $stageWim
         # Copying the WIM to C: can change the shrink limit; verify again.
         Assert-CSExecutionPreflight $Disk $C $Parts $ActiveRecovery $ReInfo $Proposal $RebuildGeometry
         Assert-CSLayoutUnchanged $Disk $snapshot
@@ -417,6 +491,15 @@ function Invoke-CSCRecoveryExecution {
             Write-Host $m.CSExecPreflightPassed -ForegroundColor Green
             return
         }
+        # A freshly formatted NTFS volume may differ from the current one.
+        # The 2 MiB surplus seen in the second test machine is not sufficient
+        # to risk deletion without knowing the final filesystem overhead.
+        $executionFloor = [int64](250MB + 16MB)
+        if ($targetFree -lt $executionFloor -or $fallbackFree -lt $executionFloor) {
+            Write-Host ($m.CS27SafetyMargin -f (Format-ExactMiB $executionFloor),
+                (Format-ExactMiB ([int64][math]::Min($targetFree,$fallbackFree)))) -ForegroundColor Yellow
+            throw $m.CSExecRecoveryTooSmall
+        }
         Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
         if (-not (Read-YesNo $m.CSExecBackupConfirmed)) {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
@@ -436,6 +519,7 @@ function Invoke-CSCRecoveryExecution {
             throw $m.CSExecRecoveryUnknown
         }
         Assert-CSWim $stageWim
+        if ((Get-CSFileSha256 $stageWim) -ne $stagedWimHash) { throw $m.CSExecHashMismatch }
         Write-Host $m.CSExecDisableWinRE
         $script:CSExecMutated = $true
         Invoke-CSExternal 'reagentc.exe' @('/disable')
@@ -457,6 +541,9 @@ function Invoke-CSCRecoveryExecution {
             -PartitionNumber ([int]$ActiveRecovery.PartitionNumber) -ErrorAction Stop
         if ([int64]$old.Offset -ne [int64]$ActiveRecovery.Offset -or
             [int64]$old.Size -ne [int64]$ActiveRecovery.Size -or
+            [int]$old.PartitionNumber -ne [int]$ActiveRecovery.PartitionNumber -or
+            $old.IsBoot -or $old.IsSystem -or $old.IsActive -or
+            $old.DriveLetter -or
             -not (Test-RecoveryPartition $old 'GPT')) { throw $m.CSExecLayoutChanged }
         # A GPT Recovery partition commonly has required/protected attributes.
         # DiskPart override is necessary; this is restricted to the VERIFIED
@@ -505,19 +592,46 @@ function Invoke-CSCRecoveryExecution {
         if ([int64]$newP.Offset -ne [int64]$newStart -or
             [int64]$newP.Size -lt $requiredRe -or
             [int64]$newP.Size -gt [int64]$RebuildGeometry.NewSize -or
-            $newP.DriveLetter) { throw $m.CSExecNewRecoveryMismatch }
+            $newP.DriveLetter -or $newP.IsBoot -or $newP.IsSystem -or
+            (Get-GptId $newP) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') {
+            throw $m.CSExecNewRecoveryMismatch
+        }
         Format-Volume -Partition $newP -FileSystem NTFS -NewFileSystemLabel 'Windows RE tools' `
             -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        # Windows RE must be a Recovery GPT partition before reagentc /enable.
+        # Set its type and GPT attributes BEFORE registering/enabling the image.
+        # Temporarily mounting a typed Recovery partition is supported and
+        # already used for the existing active Recovery in preflight.
+        Set-CSRecoveryType $Disk $newNumber
         $root = Open-CSRecoveryMount ([int]$Disk.Number) $newNumber
         try {
             $folder = Join-Path $root 'Recovery\WindowsRE'
             [void](New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop)
             $dest = Join-Path $folder 'Winre.wim'
             Copy-Item -LiteralPath $stageWim -Destination $dest -ErrorAction Stop
-            if ((Get-CSFileSha256 $dest) -ne
-                (Get-CSFileSha256 $stageWim)) {
+            if ((Get-CSFileSha256 $dest) -ne $stagedWimHash) {
                 throw $m.CSExecHashMismatch
             }
+            # Restore Windows RE/QMR configuration. ReAgent.xml and ReAgent.old
+            # describe the previous partition and must be regenerated by reagentc.
+            # They remain preserved in staging if recovery is needed manually.
+            $restored = 0
+            $extras = Join-Path $script:CSExecStaging 'RecoveryFiles'
+            if (Test-Path -LiteralPath $extras -PathType Container) {
+                foreach ($cfg in @(Get-ChildItem -LiteralPath $extras -File -Force -ErrorAction Stop)) {
+                    if ($cfg.Name -in @('ReAgent.xml','ReAgent.old')) { continue }
+                    if ($cfg.Name -notin @('boot.sdi','SrSettings.ini','WifiSettings.ini','ReCustomization.xml')) {
+                        throw ($m.CSExecRecoveryUnexpected -f $cfg.Name)
+                    }
+                    $configDest = Join-Path $folder $cfg.Name
+                    Copy-Item -LiteralPath $cfg.FullName -Destination $configDest -Force -ErrorAction Stop
+                    if ((Get-CSFileSha256 $configDest) -ne (Get-CSFileSha256 $cfg.FullName)) {
+                        throw $m.CSExecHashMismatch
+                    }
+                    $restored++
+                }
+            }
+            Write-Host ($m.CS27ConfigRestored -f $restored)
             $vol = Get-Volume -Partition $newP -ErrorAction Stop
             if ([int64]$vol.SizeRemaining -lt 250MB) { throw $m.CSExecRecoveryTooSmall }
             Write-Host $m.CSExecRegisterRecovery
@@ -529,15 +643,19 @@ function Invoke-CSCRecoveryExecution {
         } finally {
             Close-CSRecoveryMount ([int]$Disk.Number)
         }
-        Set-CSRecoveryType $Disk $newNumber
         $final = Get-WinReSnapshot
         if (-not $final.Enabled -or [int]$final.DiskNumber -ne [int]$Disk.Number -or
             [int]$final.PartitionNumber -ne $newNumber) { throw $m.CSExecWinRENotRegistered }
+        $finalRecovery = Get-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $newNumber -ErrorAction Stop
+        if (-not (Test-RecoveryPartition $finalRecovery 'GPT')) { throw $m.CSExecRecoveryTypeFailed }
+        $finalVolume = Get-Volume -Partition $finalRecovery -ErrorAction Stop
+        if ([int64]$finalVolume.SizeRemaining -lt 250MB) { throw $m.CSExecRecoveryTooSmall }
         $fs = Get-Volume -DriveLetter C -ErrorAction Stop
         if ([int64]$fs.Size -lt [int64]$Proposal.TargetExplorerGiB * 1GB) {
             Write-Host $m.CSExecExplorerNotExact -ForegroundColor Yellow
         }
         $completed = $true
+        $script:CSExecLastSucceeded = $true
         Write-Host $m.CSExecComplete -ForegroundColor Green
         Write-Host ((& reagentc.exe /info) | Out-String)
     } catch {
