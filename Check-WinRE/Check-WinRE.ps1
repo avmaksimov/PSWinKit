@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-# Repair-WinRE: interactive, one-confirmation Windows RE repair.
+# Check-WinRE: interactive, one-confirmation Windows RE repair.
 # Supports simple basic GPT/MBR layouts only. No shrink or partition moves.
 # No log files. Changes to disk only after the final Y/N approval.
 

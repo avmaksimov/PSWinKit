@@ -1,6 +1,6 @@
 # PSWinKit — PowerShell utility development contract
 
-This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Repair-Windows`, `Repair-WinRE`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
+This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Check-Windows`, `Check-WinRE`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
 
 ## 1. Scope and design principles
 
@@ -36,12 +36,12 @@ PSWinKit/
 │   ├── Remove-Paths.ps1
 │   ├── README.md
 │   └── README.ru.md
-├── Repair-Windows/
-│   ├── Repair-Windows.ps1
+├── Check-Windows/
+│   ├── Check-Windows.ps1
 │   ├── README.md
 │   └── README.ru.md
-└── Repair-WinRE/
-    ├── Repair-WinRE.ps1
+└── Check-WinRE/
+    ├── Check-WinRE.ps1
     ├── README.md
     └── README.ru.md
 ```
@@ -136,15 +136,15 @@ If UAC is canceled (`ERROR_CANCELLED`, 1223), the original invocation exits with
 
 ## 9. Localization and ownership
 
-`Common/Languages/en.psd1` and `ru.psd1` contain all PSWinKit translations, grouped into nested sections: `Common`, `Remove-Paths`, `Repair-Windows`, `Repair-WinRE`, `install`. The section name for a utility is the main `.ps1` filename without its extension. Each utility continues receiving its own **flat** `$utility.Messages` table; shared lifecycle strings are read only by Common. Example:
+`Common/Languages/en.psd1` and `ru.psd1` contain all PSWinKit translations, grouped into nested sections: `Common`, `Remove-Paths`, `Check-Windows`, `Check-WinRE`, `install`. The section name for a utility is the main `.ps1` filename without its extension. Each utility continues receiving its own **flat** `$utility.Messages` table; shared lifecycle strings are read only by Common. Example:
 
 ```powershell
 # Common/Languages/en.psd1 (excerpt)
 @{
     Common = @{ Started = 'Started: {0}' }
     'Remove-Paths' = @{ Title = 'Remove files and directories' }
-    'Repair-Windows' = @{ Title = 'Repair Windows' }
-    'Repair-WinRE' = @{ Title = 'Repair-WinRE' }
+    'Check-Windows' = @{ Title = 'Repair Windows' }
+    'Check-WinRE' = @{ Title = 'Check-WinRE' }
     install = @{ Title = 'PSWinKit installation and update' }
 }
 ```

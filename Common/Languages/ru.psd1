@@ -80,8 +80,8 @@
         SummaryTruncated    = 'Показаны только первые 15 ошибок.'
     }
 
-    'Repair-Windows' = @{
-        Title = 'Восстановление Windows'
+    'Check-Windows' = @{
+        Title = 'Проверка Windows'
 
         NotChecked = 'Не проверялся'
         EnterYOrN = 'Введите Y или N.'
@@ -190,7 +190,7 @@
         WindowsVersion0ISO = 'Версия Windows: {0}; версия образа ISO: {1}'
         VersionsDifferTheImage = 'Версии различаются: образ для обновления Windows может иметь более новую сборку.'
         DISMRestoreHealthNeedsThe = 'Для DISM /RestoreHealth важно наличие конкретных версий повреждённых компонентов.'
-        RepairWindowsLogStarted = 'Журнал Repair-Windows: '
+        RepairWindowsLogStarted = 'Журнал Check-Windows: '
         CouldNotStartThe = 'Не удалось включить журнал действий: '
         OS0Version1 = 'ОС: {0} (версия {1})'
         VolumeAddedForFolder = 'К проверке добавлен том {0} — папка «{1}»: {2}'
@@ -226,7 +226,7 @@
         AlsoEvaluateTheSFC = 'Результат SFC нужно оценить также по тексту его сообщения.'
         DISMLog = 'DISM журнал: '
         CBSLog = 'CBS журнал:  '
-        RepairWindowsLogSummary = 'Журнал Repair-Windows: '
+        RepairWindowsLogSummary = 'Журнал Check-Windows: '
         DISMDidNotRepair = 'DISM не восстановил хранилище. Проверьте сообщения DISM и CBS.'
         IfDISMISORepair = 'Если восстановление через DISM/ISO не помогает:'
         ConsiderInstallingACompatible = '  Рассмотрите установку совместимой версии Windows поверх существующей.'
@@ -237,10 +237,10 @@
         DISMReportedThatA = 'DISM сообщил, что требуется перезагрузка (она не выполнялась).'
         ToViewTheResult = 'Для просмотра результата в новом окне PowerShell:'
         RecentCharacteristicCBSErrors = 'Последние характерные ошибки CBS:'
-        SaveYourFilesBefore = 'Сохраните файлы перед перезагрузкой; затем повторите Repair-Windows.'
+        SaveYourFilesBefore = 'Сохраните файлы перед перезагрузкой; затем повторите Check-Windows.'
         RestartTheComputerNow = 'Перезагрузить компьютер сейчас?'
         CouldNotRestartThe = 'Не удалось перезагрузить компьютер: '
-        RepairWindowsError = 'Ошибка Repair-Windows: '
+        RepairWindowsError = 'Ошибка Check-Windows: '
     }
 
     'install' = @{
@@ -277,8 +277,8 @@
     }
 
 
-    'Repair-WinRE' = @{
-        Title = 'Repair-WinRE — восстановление WinRE'
+    'Check-WinRE' = @{
+        Title = 'Check-WinRE — проверка и восстановление WinRE'
         InterruptedNotice = 'ПРЕРВАНО: выполнение остановлено до завершения (Ctrl+C).'
         InterruptedWarning = 'Перед повторным запуском проверьте состояние WinRE и диска; откат не выполняется.'
         InterruptedHeading = '=== ОПЕРАЦИЯ ПРЕРВАНА ==='
@@ -413,7 +413,7 @@
         DiskMayHaveChanged = 'Диск мог измениться. Перед повторным запуском проверьте его разметку.'
         Diagnostics = '  Диагностика: Get-Partition; reagentc /info'
         MountRetained = 'Папка подключения намеренно сохранена, чтобы не удалить файлы Recovery.'
-        Failed = 'Repair-WinRE завершилась с ошибкой; см. сообщение выше.'
+        Failed = 'Check-WinRE завершилась с ошибкой; см. сообщение выше.'
         ExternalFailed = '{0}: код завершения {1}.'
         ReInfoFailed = 'Не удалось выполнить reagentc /info: {0}'
         ReInfoParseFailed = "Не удалось определить состояние WinRE по выводу reagentc:`n{0}"

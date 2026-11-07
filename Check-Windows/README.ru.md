@@ -1,6 +1,6 @@
-# Repair-Windows
+# Check-Windows
 
-**Repair-Windows** — утилита диагностики и восстановления Windows 10/11 и Windows Server 2016+ с помощью штатных средств Repair-Volume/CHKDSK, DISM и SFC. Она помогает выбрать установочный образ Windows, если обычный источник восстановления не сработал.
+**Check-Windows** — утилита диагностики и восстановления Windows 10/11 и Windows Server 2016+ с помощью штатных средств Repair-Volume/CHKDSK, DISM и SFC. Она помогает выбрать установочный образ Windows, если обычный источник восстановления не сработал.
 
 [English](README.md) | **Русский**
 
@@ -9,10 +9,10 @@
 
 ## Запуск без CMD-файла
 
-Запустите `Repair-Windows.ps1` через контекстное меню **«Выполнить с помощью PowerShell»** либо из открытой консоли:
+Запустите `Check-Windows.ps1` через контекстное меню **«Выполнить с помощью PowerShell»** либо из открытой консоли:
 
 ```powershell
-& '.\Repair-Windows.ps1'
+& '.\Check-Windows.ps1'
 ```
 
 При необходимости общая библиотека PSWinKit запрашивает UAC и запускает экземпляр основного PS1 с повышенными правами. Она же управляет паузой при завершении. При запуске с сетевого диска повышенный процесс должен иметь доступ к общему каталогу.
@@ -68,7 +68,7 @@ Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descendin
 Сохраняйте структуру каталогов [PSWinKit](https://github.com/avmaksimov/PSWinKit). Из корня репозитория утилита запускается так:
 
 ```powershell
-.\Repair-Windows\Repair-Windows.ps1
+.\Check-Windows\Check-Windows.ps1
 ```
 
 Общий запуск, UAC, локализация и завершение реализованы в `../Common/Common.ps1`. Прежний автономный `update.ps1` больше не используется. Его история доступна через Git.
@@ -83,11 +83,11 @@ Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descendin
 ## Файлы
 
 ```text
-Repair-Windows.ps1
+Check-Windows.ps1
 README.md
 README.ru.md
 ```
 
 Общая библиотека и [контракт разработки](../Common/README.ru.md) — в `../Common/`. Лицензия: [MIT](../LICENSE).
 
-> **Локализация:** сообщения интерфейса хранятся в секции `Repair-Windows` файлов `../Common/Languages/ru.psd1` и `../Common/Languages/en.psd1`; общие служебные сообщения — в секции `Common`. Вывод системных инструментов DISM, SFC и CHKDSK зависит от языка Windows.
+> **Локализация:** сообщения интерфейса хранятся в секции `Check-Windows` файлов `../Common/Languages/ru.psd1` и `../Common/Languages/en.psd1`; общие служебные сообщения — в секции `Common`. Вывод системных инструментов DISM, SFC и CHKDSK зависит от языка Windows.
