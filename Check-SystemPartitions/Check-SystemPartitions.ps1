@@ -21,11 +21,6 @@ $m = $utility.Messages
 . (Join-Path $PSScriptRoot 'Execution.ps1')
 . (Join-Path $PSScriptRoot 'Planning.ps1')
 . (Join-Path $PSScriptRoot 'Cleanup.ps1')
-# Supplemental localized messages are shipped in this folder so that the ZIP
-# can be copied directly without overwriting user-maintained Common/Languages.
-$localMessages = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'Execution.Messages.psd1') -ErrorAction Stop
-$locale = if ($utility.Language -match '(?i)^ru($|[-_])') { 'ru' } else { 'en' }
-foreach ($entry in $localMessages[$locale].GetEnumerator()) { $m[[string]$entry.Key] = [string]$entry.Value }
 
 
 $script:MiB = [int64]1048576
