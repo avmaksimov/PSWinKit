@@ -11,6 +11,7 @@
 | [Remove-Paths](Remove-Paths/README.ru.md) | Интерактивное безвозвратное удаление выбранных файлов и каталогов, в том числе защищённых |
 | [Repair-Windows](Repair-Windows/README.ru.md) | Восстановление Windows через CHKDSK, DISM и SFC |
 | [Repair-WinRE](Repair-WinRE/README.ru.md) | Восстановление WinRE и поддерживаемых схем Recovery на GPT/MBR |
+| [Check-SystemPartitions](Check-SystemPartitions/README.ru.md) | Диагностика системных разделов, оптимизация C: и Recovery, проверка и удаление лишних разделов |
 
 ## Требования и запуск
 
@@ -22,6 +23,7 @@ Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64, где пр�
 .\Remove-Paths\Remove-Paths.ps1
 .\Repair-Windows\Repair-Windows.ps1
 .\Repair-WinRE\Repair-WinRE.ps1
+.\Check-SystemPartitions\Check-SystemPartitions.ps1
 ```
 
 Описание возможностей, предупреждения и ограничения приведены в README каждой утилиты. Структуру каталогов необходимо сохранять: утилиты подключают `Common/Common.ps1` по относительному пути.
@@ -65,6 +67,7 @@ Expand-Archive -LiteralPath $zip -DestinationPath $dir
 - [`Remove-Paths/README.ru.md`](Remove-Paths/README.ru.md) — запуск, поведение и ограничения Remove-Paths.
 - [`Repair-Windows/README.ru.md`](Repair-Windows/README.ru.md) — запуск и ограничения Repair-Windows.
 - [`Repair-WinRE/README.ru.md`](Repair-WinRE/README.ru.md) — восстановление WinRE, схемы Recovery и ограничения безопасности.
+- [`Check-SystemPartitions/README.ru.md`](Check-SystemPartitions/README.ru.md) — диагностика системного диска и оптимизация разметки.
 - [`README.md`](README.md) — обзор на английском языке.
 
 Лицензия проекта — [MIT](LICENSE).
