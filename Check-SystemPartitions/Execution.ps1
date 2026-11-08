@@ -5,6 +5,7 @@
 
 $script:CSExecMutated = $false
 $script:CSExecLastSucceeded = $false
+$script:CSExecErrorReportedMessage = $null
 $script:CSExecStaging = $null
 $script:CSExecMount = $null
 $script:CSExecMountPart = $null
@@ -663,6 +664,7 @@ function Invoke-CSCRecoveryExecution {
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
+        $script:CSExecErrorReportedMessage = $_.Exception.Message
         if ($script:CSExecMutated) {
             Write-Host $m.CSExecManualRecovery -ForegroundColor Yellow
             Write-Host ($m.CSExecStagedAt -f $stageWim) -ForegroundColor Yellow
@@ -924,6 +926,7 @@ function Invoke-CSCreateMissingRecovery {
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
+        $script:CSExecErrorReportedMessage = $_.Exception.Message
         if ($script:CSExecMutated) {
             Write-Host $m.CSExecManualRecovery -ForegroundColor Yellow
             if ($stageWim) { Write-Host ($m.CSExecStagedAt -f $stageWim) -ForegroundColor Yellow }

@@ -79,7 +79,13 @@ function Format-FreeSpaceSize([int64]$bytes) {
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
-function Format-ExactMiB([int64]$bytes) { return ($m.CSSizeMiB -f ([math]::Round($bytes / $script:MiB, 2))) }
+function Format-ExactMiB([int64]$bytes) {
+    # Keep the historical function name for callers; display GiB for sizes of 1 GiB or more.
+    if ($bytes -ge $script:GiB) {
+        return ($m.CSSizeGiB -f ([math]::Round($bytes / [double]$script:GiB, 2)))
+    }
+    return ($m.CSSizeMiB -f ([math]::Round($bytes / [double]$script:MiB, 2)))
+}
 function Get-PartitionEnd($part) { return ([int64]$part.Offset + [int64]$part.Size) }
 function Get-GptUsableBounds($disk) {
     # Query exact GPT usable boundaries from Windows, not a guessed 33-sector
@@ -627,19 +633,19 @@ try {
     if ($hasChoices) {
         Write-Host ''
         Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
-        Write-Host $m.CS27ExecuteSelectionNotice -ForegroundColor Yellow
+        Write-Host $m.CSSelectionNotice -ForegroundColor Yellow
         # Select each operation explicitly; the actual executor performs
         # preflight checks and obtains separate final confirmation.
         if ($canPreviewC) {
             if ($null -eq $activeRecovery) {
-                $optimiseC = Read-YesNo $m.CS26AskMissingRecovery
+                $optimiseC = Read-YesNo $m.CSAskCreateRecovery
             } elseif ($proposal.Beauty) {
                 $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f
                     $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
             } elseif ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
                 [int64]$proposal.ChangeBytes -lt 0) {
-                $optimiseC = Read-YesNo ($m.CS284AskIncreaseRecovery -f
+                $optimiseC = Read-YesNo ($m.CSAskIncreaseRecovery -f
                     (Format-ExactMiB ([int64]$proposal.Geometry.NewSize)),
                     (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes))))
             } else {
@@ -655,10 +661,10 @@ try {
                 [int]$_.Number -eq [int]$candidate.PartitionNumber
             })
             if ($candidateAudit.Count -ne 1 -or -not $candidateAudit[0].Permitted) {
-                Write-Host ($m.CS28BlockedSelection -f $candidate.PartitionNumber) -ForegroundColor Yellow
+                Write-Host ($m.CSSelectionBlocked -f $candidate.PartitionNumber) -ForegroundColor Yellow
                 continue
             }
-            if (Read-YesNo ($m.CS284AskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
+            if (Read-YesNo ($m.CSAskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
                 $selected.Add([int]$candidate.PartitionNumber)
             }
         }
@@ -667,7 +673,7 @@ try {
     }
 
     Write-Host ''
-    $planTitle = $m.CS284PlanTitleExecute
+    $planTitle = $m.CSProposedPlanTitle
     Write-Host ('=== ' + $planTitle + ' ===') -ForegroundColor Cyan
     $anyAction = $false
     $plannedCSize = [int64]$c.Size
@@ -837,7 +843,8 @@ catch {
     $script:CSRunHandled = $true
     if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) {
         $utility.InterruptedByUser = $true
-    } else {
+    } elseif ([string]$script:CSExecErrorReportedMessage -ne $_.Exception.Message) {
+        # The execution module already displayed this exact error, with recovery advice.
         Write-Host ''
         Write-Host ('=== ' + $m.ErrorSection + ' ===') -ForegroundColor Red
         Write-Host $_.Exception.Message -ForegroundColor Red
