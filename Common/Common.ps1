@@ -173,44 +173,55 @@ function Import-PSWinKitLanguageData {
     return (Convert-PSWinKitLanguageAst -HashtableAst $expression -File $File)
 }
 
+# Import the selected language and English fallback only once. With -Section,
+# return a flat message hashtable (also useful for diagnostics); otherwise
+# return all named sections for Start-Utility to select from.
 function Import-PSWinKitTranslations {
     param([string]$Folder, [string]$SelectedFile, [string]$Section, [switch]$RequireTitle)
+
     $fallbackCandidate = Join-Path $Folder 'en.psd1'
     if (-not (Test-Path -LiteralPath $fallbackCandidate -PathType Leaf)) {
         throw "English language file missing: $fallbackCandidate"
     }
     $fallbackFile = Resolve-PSWinKitLanguageFilePath -File $fallbackCandidate
     $SelectedFile = Resolve-PSWinKitLanguageFilePath -File $SelectedFile
+
     $fallback = Import-PSWinKitLanguageData -File $fallbackFile
     $selected = if ($SelectedFile -ieq $fallbackFile) {
         $fallback
     } else {
         Import-PSWinKitLanguageData -File $SelectedFile
     }
-    if (-not ($fallback -is [hashtable]) -or -not ($selected -is [hashtable])) {
-        throw "Invalid translation table: $SelectedFile"
-    }
-    if (-not $fallback.ContainsKey($Section) -or -not ($fallback[$Section] -is [hashtable])) {
-        throw "Missing English language section: $Section ($fallbackFile)"
-    }
-    $englishSection = $fallback[$Section]
-    $localSection = @{}
-    if ($selected.ContainsKey($Section)) {
-        if (-not ($selected[$Section] -is [hashtable])) {
-            throw "Invalid language section: $Section ($SelectedFile)"
-        }
-        $localSection = $selected[$Section]
-    }
-    if ($RequireTitle -and (-not $englishSection.ContainsKey('Title') -or
-        [string]::IsNullOrWhiteSpace([string]$englishSection['Title']))) {
-        throw "Missing mandatory Title in English section: $Section ($fallbackFile)"
-    }
-    $messages = @{}
-    foreach ($key in $englishSection.Keys) { $messages[$key] = $englishSection[$key] }
-    foreach ($key in $localSection.Keys) { $messages[$key] = $localSection[$key] }
-    return $messages
-}
 
+    $sections = if ($Section) { @($Section) } else { @($fallback.Keys) }
+    $allMessages = @{}
+    foreach ($sectionName in $sections) {
+        if (-not $fallback.ContainsKey($sectionName) -or
+            $fallback[$sectionName] -isnot [hashtable]) {
+            throw "Missing English language section: $sectionName ($fallbackFile)"
+        }
+        $englishSection = $fallback[$sectionName]
+        $localSection = @{}
+        if ($selected.ContainsKey($sectionName)) {
+            if ($selected[$sectionName] -isnot [hashtable]) {
+                throw "Invalid language section: $sectionName ($SelectedFile)"
+            }
+            $localSection = $selected[$sectionName]
+        }
+        if ($RequireTitle -and $Section -and
+            (-not $englishSection.ContainsKey('Title') -or
+             [string]::IsNullOrWhiteSpace([string]$englishSection['Title']))) {
+            throw "Missing mandatory Title in English section: $sectionName ($fallbackFile)"
+        }
+        $messages = @{}
+        foreach ($key in $englishSection.Keys) { $messages[$key] = $englishSection[$key] }
+        foreach ($key in $localSection.Keys) { $messages[$key] = $localSection[$key] }
+        $allMessages[$sectionName] = $messages
+    }
+
+    if ($Section) { return $allMessages[$Section] }
+    return $allMessages
+}
 function Get-PSWinKitText {
     param([hashtable]$Messages, [string]$Key, [object[]]$Values = @())
     if (-not $Messages.ContainsKey($Key)) { throw "Missing Common language key: $Key" }
@@ -362,11 +373,19 @@ function Start-Utility {
     $explicitLanguage = -not [string]::IsNullOrEmpty($LanguageFile)
     $selectedFile = Find-PSWinKitLanguageFile -Folder $languageFolder -Language $LanguageFile -Explicit:$explicitLanguage
     $selectedCulture = [IO.Path]::GetFileNameWithoutExtension($selectedFile)
-    $utilityMessages = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section $utilitySection -RequireTitle
-    if (-not $utilityMessages.ContainsKey('Title') -or -not [string]$utilityMessages['Title']) {
+    $translations = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile
+    if (-not $translations.ContainsKey($utilitySection)) {
+        throw "Missing English language section: $utilitySection ($languageFolder)"
+    }
+    if (-not $translations.ContainsKey('Common')) {
+        throw "Missing English language section: Common ($languageFolder)"
+    }
+    $utilityMessages = $translations[$utilitySection]
+    if (-not $utilityMessages.ContainsKey('Title') -or
+        [string]::IsNullOrWhiteSpace([string]$utilityMessages['Title'])) {
         throw "Missing mandatory Title in utility translations: $selectedFile ($utilitySection)"
     }
-    $commonMessages = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section 'Common'
+    $commonMessages = $translations['Common']
 
     if ($RequireAdministrator -and -not (Test-PSWinKitAdministrator)) {
         if ($inheritedElevation -eq '1') {
