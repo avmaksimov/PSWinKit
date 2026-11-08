@@ -9,6 +9,7 @@
         ElevationFailed    = 'Не удалось получить права администратора после перезапуска.'
         PressAnyKey        = 'Нажмите любую клавишу для закрытия окна...'
         PressEnter         = 'Нажмите Enter'
+        InterruptedByUser = 'Прервано пользователем.'
     }
 
     'Remove-Paths' = @{
@@ -930,9 +931,9 @@
         CSNewFinalConfirm = 'ОКОНЧАТЕЛЬНОЕ ПОДТВЕРЖДЕНИЕ: изменить C: по плану и создать Recovery перед следующим разделом? Существующие разделы не удаляются.'
         CSNewApplyingTitle = 'Создание отсутствующего раздела Recovery для Windows RE'
         CSNewComplete = 'Recovery создан, Windows RE включена, остальные исходные разделы сохранены.'
-        CSIsoNeeded = 'Локальный образ WinRE не найден или непригоден. Подключите установочный ISO Windows с соответствующей редакцией.'
-        CSIsoLetterPrompt = 'Буква подключённого ISO без двоеточия (пустой Enter — отмена)'
-        CSIsoInvalidLetter = 'Укажите одну латинскую букву диска без двоеточия.'
+        CSIsoNeeded = 'Локальный образ WinRE не найден или непригоден.'
+        CSIsoLetterPrompt = 'Смонтируйте подходящий установочный ISO Windows и введите букву диска (пустой Enter — отмена)'
+        CSIsoInvalidLetter = 'Укажите одну латинскую букву диска (например, F или F:).'
         CSIsoInstallMissing = 'На диске {0}: не обнаружены sources\install.wim или sources\install.esd.'
         CSIsoInstallFile = 'Установочный образ: {0}'
         CSIsoUnsupportedArchitecture = 'Неизвестная архитектура установленной системы: {0}.'
@@ -943,7 +944,7 @@
         CSIsoColumnBuild = 'Сборка'
         CSIsoColumnArch = 'Архитектура'
         CSIsoColumnName = 'Название'
-        CSIsoNoUniqueMatch = 'Не удалось однозначно подобрать образ: редакция {0}, сборка {1}, архитектура {2}.'
+        CSIsoNoUniqueMatch = 'Несколько подходящих установочных образов для редакции {0}, сборки {1}, архитектуры {2}; не удалось определить вариант установленной Windows.'
         CSIsoSelected = 'Выбран индекс {0}: редакция {1}, сборка {2}, архитектура {3}.'
         CSIsoBuildWarning = 'Сборка образа {0} отличается от установленной {1}; допускается общее ядро Windows 11.'
         CSIsoTrying7Zip = 'Извлечение Winre.wim через 7-Zip...'

@@ -374,6 +374,7 @@ foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
         Messages       = $utilityMessages
         CommonMessages = $commonMessages
         PauseOnExit     = $pause
+        InterruptedByUser = $false
         OriginalUserFolders = $originalUserFolders
     }
     Write-Host ('=== {0} ===' -f [string]$utilityMessages['Title']) -ForegroundColor Cyan
@@ -390,6 +391,24 @@ function Stop-Utility {
     $Utility.Stopwatch.Stop()
     $elapsed = $Utility.Stopwatch.Elapsed
     $commonMessages = $Utility.CommonMessages
+    if ($Utility.PSObject.Properties.Match('InterruptedByUser').Count -gt 0 -and
+        [bool]$Utility.InterruptedByUser) {
+        # Ctrl+C can stop the PowerShell output pipeline. Prefer writing the
+        # cancellation notice directly to the console; do not alter Ctrl+C.
+        $notice = Get-PSWinKitText -Messages $commonMessages -Key 'InterruptedByUser'
+        try {
+            $oldColor = [Console]::ForegroundColor
+            try {
+                [Console]::ForegroundColor = [ConsoleColor]::Red
+                [Console]::Error.WriteLine('')
+                [Console]::Error.WriteLine($notice)
+            } finally {
+                [Console]::ForegroundColor = $oldColor
+            }
+        } catch {
+            try { Write-Host ''; Write-Host $notice -ForegroundColor Red } catch { }
+        }
+    }
     Write-Host ''
     Write-Host (Get-PSWinKitText -Messages $commonMessages -Key 'Finished' `
         -Values @((Format-PSWinKitDateTime $finishedAt))) -ForegroundColor Gray

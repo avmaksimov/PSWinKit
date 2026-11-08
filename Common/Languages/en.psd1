@@ -9,6 +9,7 @@
         ElevationFailed    = 'Administrator privileges were not obtained after relaunch.'
         PressAnyKey        = 'Press any key to close this window...'
         PressEnter         = 'Press Enter'
+        InterruptedByUser = 'Interrupted by user.'
     }
 
     'Remove-Paths' = @{
@@ -930,9 +931,9 @@
         CSNewFinalConfirm = 'FINAL CONFIRMATION: change C: as planned and create Recovery before the next partition? No existing partition will be deleted.'
         CSNewApplyingTitle = 'Creating the missing Windows RE Recovery partition'
         CSNewComplete = 'Recovery was created, Windows RE enabled, and all original other partitions were preserved.'
-        CSIsoNeeded = 'No usable local WinRE image was found. Mount matching Windows installation ISO media.'
-        CSIsoLetterPrompt = 'Mounted ISO drive letter, without colon (blank Enter cancels)'
-        CSIsoInvalidLetter = 'Enter one Latin drive letter without a colon.'
+        CSIsoNeeded = 'No usable local WinRE image was found.'
+        CSIsoLetterPrompt = 'Mount a matching Windows installation ISO and enter its drive letter (blank Enter cancels)'
+        CSIsoInvalidLetter = 'Enter one Latin drive letter (e.g. F or F:).'
         CSIsoInstallMissing = 'Drive {0}: has neither sources\install.wim nor sources\install.esd.'
         CSIsoInstallFile = 'Installation image: {0}'
         CSIsoUnsupportedArchitecture = 'Unsupported installed Windows architecture: {0}.'
@@ -943,7 +944,7 @@
         CSIsoColumnBuild = 'Build'
         CSIsoColumnArch = 'Architecture'
         CSIsoColumnName = 'Name'
-        CSIsoNoUniqueMatch = 'No unique matching image for edition {0}, build {1}, architecture {2}.'
+        CSIsoNoUniqueMatch = 'Multiple matching installation images for edition {0}, build {1}, architecture {2}; unable to determine the installed Windows variant.'
         CSIsoSelected = 'Selected index {0}: edition {1}, build {2}, architecture {3}.'
         CSIsoBuildWarning = 'Image build {0} differs from installed build {1}; Windows 11 shared core accepted.'
         CSIsoTrying7Zip = 'Extracting Winre.wim using 7-Zip...'

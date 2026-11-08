@@ -106,7 +106,7 @@ For a utility that does not need elevation, omit `-RequireAdministrator`.
 
 **Final pause.** There is no public `-PauseOnExit` parameter. `Start-Utility` sets `$utility.PauseOnExit` automatically: **pause by default** unless the current PowerShell command line reliably proves that the process is an interactive shell that will stay open (including explicit `-NoExit`). Known noninteractive launches do not pause. A one-shot `-File`, `-Command` or `-EncodedCommand` launch pauses. Unknown launch options, an unavailable command line, and process-query errors keep the pause enabled. Parent process `explorer.exe` alone is never proof that a window will close. A utility may explicitly override the internal property, e.g. `$utility.PauseOnExit = $false` before reboot. Canceling UAC causes no pause.
 
-**Return value.** On success, return `$utility`, holding `StartedAt`, a timer, `Messages`, the selected language, and pause state. If execution is delegated to an elevated process or UAC is canceled, return `$null`: the original script must return immediately **without its summary or Stop-Utility**. Other initialization errors are reported separately.
+**Return value.** On success, return `$utility`, holding `StartedAt`, a timer, `Messages`, the selected language, pause state and `InterruptedByUser` (initially `$false`). If execution is delegated to an elevated process or UAC is canceled, return `$null`: the original script must return immediately **without its summary or Stop-Utility**. Other initialization errors are reported separately.
 
 ## 7. Header and start time
 
@@ -169,7 +169,9 @@ Duration: 00:00:33
 
 Date/time and duration follow section 9. The word “Finished” is neutral; it does not assert that every action succeeded. Results, errors and numeric statistics are emitted by the utility itself **before** calling `Stop-Utility`. A final keypress prompt follows these lines only when `$utility.PauseOnExit` is true. `Stop-Utility` reads a keyboard key (falling back to Enter only when raw key input is unavailable). Common does not print an additional summary.
 
-Call `Stop-Utility` only after a successful `Start-Utility`, preferably in `finally`. An ordinary Ctrl+C may still unwind through `finally`; forcibly killing the process cannot guarantee execution.
+**User interruption.** The internal `$utility.InterruptedByUser` flag defaults to `$false`. Utilities that detect Ctrl+C (for example a `PipelineStoppedException`, or entry into `finally` without completing the guarded operation or its error handler) set it to `$true` before calling `Stop-Utility`. Common then prints its localized **Interrupted by user** message **before** the finished time and duration. It uses direct console error output as a best-effort fallback when PowerShell has already stopped its output pipeline. It does not intercept, suppress or change Ctrl+C behavior, and should not mislabel ordinary failures as user interruptions. Existing utilities may migrate to this shared notice individually.
+
+Call `Stop-Utility` only after a successful `Start-Utility`, preferably in `finally`. Ctrl+C may bypass `catch` but normally unwinds through `finally`; Windows PowerShell may still suppress output during cancellation, and forcibly killing the process cannot guarantee execution.
 
 ## 11. Utility template
 

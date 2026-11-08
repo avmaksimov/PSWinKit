@@ -171,8 +171,34 @@ function Test-RecoveryPartition($part, [string]$style) {
     return ($type -match '^(Recovery|0x27)$' -or $mbr -match '^(Recovery|0x27)$')
 }
 function Get-WinReSnapshot {
-    $output = (& cmd.exe /d /c 'reagentc.exe /info 2>&1' | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw ($m.ReInfoFailed -f $output) }
+    # Run REAgentC directly. A UNC working directory is safe here and native
+    # stderr never becomes a PowerShell error record when $ErrorActionPreference
+    # is Stop (Windows PowerShell 5.1).
+    $command = Get-Command 'reagentc.exe' -CommandType Application -ErrorAction Stop
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $command.Source
+    $start.Arguments = '/info'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.WorkingDirectory = $env:SystemRoot
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Console]::OutputEncoding
+    $start.StandardErrorEncoding = [Console]::OutputEncoding
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw ($m.ReInfoFailed -f '') }
+        # Both streams are consumed concurrently to avoid pipe-buffer deadlock.
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $output = ($stdout.GetAwaiter().GetResult() + [Environment]::NewLine +
+            $stderr.GetAwaiter().GetResult()).Trim()
+        if ($process.ExitCode -ne 0) { throw ($m.ReInfoFailed -f $output) }
+    } finally {
+        $process.Dispose()
+    }
     $status = [regex]::Match($output,
       '(?im)^\s*[^:\r\n]+:\s*(Enabled|Disabled|\u0412\u043a\u043b\u044e\u0447\u0435\u043d\u043e|\u041e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u043e)\s*$')
     if (-not $status.Success) { throw ($m.ReInfoParseFailed -f $output) }
@@ -492,6 +518,7 @@ function Show-CSFinalSummary {
     Show-Partitions $liveRows $m.CSFinalLayoutTitle
 }
 
+$script:CSRunHandled = $false
 try {
     Import-Module Storage -ErrorAction Stop
     Write-Host $m.CSFinalInteractiveWarning -ForegroundColor Yellow
@@ -802,14 +829,25 @@ try {
             }
         }
     }
+    $script:CSRunHandled = $true
 }
 catch {
-    Write-Host ''
-    Write-Host ('=== ' + $m.ErrorSection + ' ===') -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
+    $script:CSRunHandled = $true
+    if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) {
+        $utility.InterruptedByUser = $true
+    } else {
+        Write-Host ''
+        Write-Host ('=== ' + $m.ErrorSection + ' ===') -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
 }
 finally {
-    # ISO staging may contain WinRE rescue material after a failed disk change.
-    Clear-CSISOStage
-    Stop-Utility -Utility $utility
+    # Ctrl+C may bypass catch, but normally still enters finally.
+    if (-not $script:CSRunHandled) { $utility.InterruptedByUser = $true }
+    try {
+        # ISO staging may contain WinRE rescue material after a failed disk change.
+        Clear-CSISOStage
+    } finally {
+        Stop-Utility -Utility $utility
+    }
 }

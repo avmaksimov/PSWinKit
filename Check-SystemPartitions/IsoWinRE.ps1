@@ -25,6 +25,7 @@ function Select-CSISOImageIndex([string]$path) {
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
     $edition = [string]$cv.EditionID
     $build = [int]$cv.CurrentBuildNumber
+    $installationType = [string]$cv.InstallationType
     $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
     $architecture = Get-CSNormalizedArchitecture ([string]$cpu.Architecture)
     if ($architecture -notin @('x64','ARM64','x86')) {
@@ -51,7 +52,10 @@ function Select-CSISOImageIndex([string]$path) {
             Architecture = $ar; Name = [string]$d.ImageName
         }
         if ($ed -ieq $edition -and $ar -ieq $architecture -and ($exact -or $shared)) {
-            $matches += [pscustomobject]@{ Index = [int]$d.ImageIndex; Build = $ib; Exact = $exact }
+            $matches += [pscustomobject]@{
+                Index = [int]$d.ImageIndex; Build = $ib; Exact = $exact
+                Name = [string]$d.ImageName
+            }
         }
     }
     Write-Host ''
@@ -62,14 +66,37 @@ function Select-CSISOImageIndex([string]$path) {
         @{Label=$m.CSIsoColumnBuild;Expression={$_.Build}}, `
         @{Label=$m.CSIsoColumnArch;Expression={$_.Architecture}}, `
         @{Label=$m.CSIsoColumnName;Expression={$_.Name}} -AutoSize | Out-Host
-    $exactMatches = @($matches | Where-Object { $_.Exact })
-    $otherMatches = @($matches | Where-Object { -not $_.Exact })
+    # Exact build wins over compatible Windows 11 shared-core images.
+    $preferredMatches = @($matches | Where-Object { $_.Exact })
+    if ($preferredMatches.Count -eq 0) {
+        $preferredMatches = @($matches | Where-Object { -not $_.Exact })
+    }
     $chosen = $null
-    if ($exactMatches.Count -eq 1) { $chosen = $exactMatches[0] }
-    elseif ($exactMatches.Count -eq 0 -and $otherMatches.Count -eq 1) {
-        $chosen = $otherMatches[0]
+    if ($preferredMatches.Count -eq 1) {
+        $chosen = $preferredMatches[0]
+    } elseif (-not $isClient -and $preferredMatches.Count -eq 2 -and
+        $installationType -in @('Server', 'Server Core')) {
+        # Windows Server ISO typically contains Core and Desktop Experience
+        # with identical EditionId, build and architecture. A pair can be
+        # distinguished only if precisely ONE image is explicitly named as
+        # Desktop Experience. Never rely on a hard-coded index or image order.
+        # The Russian name occurs on localized Windows Server 2019 media.
+        $desktop = @($preferredMatches | Where-Object {
+            $_.Name -match '(?i:Desktop Experience|возможности рабочего стола)'
+        })
+        if ($desktop.Count -eq 1) {
+            if ($installationType -eq 'Server') {
+                $chosen = $desktop[0]
+            } else {
+                $other = @($preferredMatches | Where-Object {
+                    $_.Index -ne $desktop[0].Index
+                })
+                if ($other.Count -eq 1) { $chosen = $other[0] }
+            }
+        }
     }
     if ($null -eq $chosen) {
+        # Fail closed for unfamiliar / ambiguous server ISO naming.
         throw ($m.CSIsoNoUniqueMatch -f $edition, $build, $architecture)
     }
     Write-Host ($m.CSIsoSelected -f $chosen.Index, $edition, $chosen.Build, $architecture) -ForegroundColor Green
@@ -93,7 +120,7 @@ function Get-CSISOImage {
         return $script:CSISOImagePath
     }
     Write-Host $m.CSIsoNeeded -ForegroundColor Yellow
-    $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().ToUpperInvariant()
+    $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().TrimEnd(':').ToUpperInvariant()
     if (-not $letter) { return $null }
     if ($letter -notmatch '^[A-Z]$') { throw $m.CSIsoInvalidLetter }
 
