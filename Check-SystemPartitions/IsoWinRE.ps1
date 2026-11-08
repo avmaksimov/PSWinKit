@@ -115,6 +115,36 @@ function Get-CSSevenZipPath {
     return $null
 }
 
+function Get-CSInstallationSource([string]$letter) {
+    # The first SWM part has no numeric suffix; later parts are install2.swm, etc.
+    foreach ($name in @('sources\install.wim', 'sources\install.esd', 'sources\install.swm')) {
+        $candidate = "$letter`:\$name"
+        if ([IO.File]::Exists($candidate)) { return $candidate }
+    }
+    return $null
+}
+
+function Get-CSSplitWimPattern([string]$source) {
+    # DISM requires all split parts in the same directory.
+    $folder = Split-Path -Path $source -Parent
+    $parts = @(Get-ChildItem -LiteralPath $folder -Filter 'install*.swm' -File -ErrorAction Stop |
+        Where-Object { $_.Name -match '(?i)^install(?:[2-9]|[1-9][0-9]+)?\.swm$' })
+    if ($parts.Count -eq 0 -or -not [IO.File]::Exists($source)) {
+        throw $m.CSIsoSplitMissingSource
+    }
+    $numbers = @($parts | ForEach-Object {
+        if ($_.Name -ieq 'install.swm') { 1 }
+        else { [int]([regex]::Match($_.Name, '(?i)^install([0-9]+)\.swm$').Groups[1].Value) }
+    })
+    $max = [int](($numbers | Measure-Object -Maximum).Maximum)
+    for ($n = 2; $n -le $max; $n++) {
+        if ($numbers -notcontains $n) {
+            throw ($m.CSIsoSplitMissingPart -f $n)
+        }
+    }
+    return (Join-Path $folder 'install*.swm')
+}
+
 function Get-CSMountedInstallationImages {
     # Win32_CDROMDrive also sees installation ISOs attached by the hypervisor.
     # Get-DiskImage alone does NOT identify a host-mounted virtual DVD in a guest.
@@ -130,11 +160,7 @@ function Get-CSMountedInstallationImages {
         if ($letter -notmatch '^[A-Z]$') { continue }
 
         # A CD/DVD device is not sufficient: it must contain Windows setup media.
-        $source = $null
-        foreach ($name in @('sources\install.wim', 'sources\install.esd')) {
-            $candidate = "$letter`:\$name"
-            if ([IO.File]::Exists($candidate)) { $source = $candidate; break }
-        }
+        $source = Get-CSInstallationSource $letter
         if (-not $source) { continue }
 
         # Native mounted ISO: prefer its filename. Hyper-V guest virtual DVDs
@@ -192,13 +218,15 @@ function Get-CSISOImage {
         $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().TrimEnd(':').ToUpperInvariant()
         if (-not $letter) { return $null }
         if ($letter -notmatch '^[A-Z]$') { throw $m.CSIsoInvalidLetter }
-        foreach ($name in @('sources\install.wim', 'sources\install.esd')) {
-            $candidate = "$letter`:\$name"
-            if ([IO.File]::Exists($candidate)) { $source = $candidate; break }
-        }
+        $source = Get-CSInstallationSource $letter
         if (-not $source) { throw ($m.CSIsoInstallMissing -f $letter) }
     }
     Write-Host ($m.CSIsoInstallFile -f $source)
+    $extension = [IO.Path]::GetExtension($source).ToLowerInvariant()
+    $swmPattern = $null
+    if ($extension -eq '.swm') {
+        $swmPattern = Get-CSSplitWimPattern $source
+    }
     $index = Select-CSISOImageIndex $source
 
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
@@ -229,15 +257,25 @@ function Get-CSISOImage {
     }
     if (-not [IO.File]::Exists($destination)) {
         $free = [int64](Get-Volume -DriveLetter C -ErrorAction Stop).SizeRemaining
-        $need = if ([IO.Path]::GetExtension($source) -ieq '.esd') { [int64](9GB) } else { [int64](2GB) }
+        # Exporting ESD or split SWM to a temporary single-index WIM may need
+        # several GiB; ordinary WIM can be mounted in place instead.
+        $need = if ($extension -in @('.esd', '.swm')) { [int64](9GB) } else { [int64](2GB) }
         if ($free -lt $need) { throw ($m.CSIsoSpaceRequired -f (Format-PartitionSize $need)) }
         $image = $source
-        if ([IO.Path]::GetExtension($source) -ieq '.esd') {
+        if ($extension -in @('.esd', '.swm')) {
             $image = Join-Path $script:CSISOStageDir 'Install-Selected.wim'
-            Write-Host $m.CSIsoExportingESD -ForegroundColor DarkGray
-            Invoke-CSExternal 'dism.exe' @('/English','/Export-Image',
-                "/SourceImageFile:$source", "/SourceIndex:$index",
-                "/DestinationImageFile:$image", '/Compress:max', '/CheckIntegrity') | Out-Null
+            $exportArgs = @('/English', '/Export-Image', "/SourceImageFile:$source",
+                "/SourceIndex:$index", "/DestinationImageFile:$image", '/CheckIntegrity')
+            if ($extension -eq '.swm') {
+                Write-Host $m.CSIsoExportingSWM -ForegroundColor DarkGray
+                # A split WIM cannot be mounted as-is; DISM can export the
+                # selected index when supplied with all the SWM parts.
+                $exportArgs += "/SWMFile:$swmPattern"
+            } else {
+                Write-Host $m.CSIsoExportingESD -ForegroundColor DarkGray
+                $exportArgs += '/Compress:max'
+            }
+            Invoke-CSExternal 'dism.exe' $exportArgs | Out-Null
             $index = 1
         }
         $mount = Join-Path $script:CSISOStageDir 'Mount'
@@ -262,7 +300,7 @@ function Get-CSISOImage {
     }
     Assert-CSWim $destination
     $script:CSISOImagePath = $destination
-    Write-Host ($m.CSIsoReady -f (Format-ExactMiB ([int64](Get-Item -LiteralPath $destination -Force).Length))) -ForegroundColor Green
+    Write-Host ($m.CSIsoReady -f (Format-DetailedSize ([int64](Get-Item -LiteralPath $destination -Force).Length))) -ForegroundColor Green
     return $destination
 }
 
