@@ -400,13 +400,13 @@ function Stop-Utility {
             $oldColor = [Console]::ForegroundColor
             try {
                 [Console]::ForegroundColor = [ConsoleColor]::Red
-                [Console]::Error.WriteLine('')
+                [Console]::Error.WriteLine([Environment]::NewLine)
                 [Console]::Error.WriteLine($notice)
             } finally {
                 [Console]::ForegroundColor = $oldColor
             }
         } catch {
-            try { Write-Host ''; Write-Host $notice -ForegroundColor Red } catch { }
+            try { Write-Host ''; Write-Host ''; Write-Host $notice -ForegroundColor Red } catch { }
         }
     }
     Write-Host ''

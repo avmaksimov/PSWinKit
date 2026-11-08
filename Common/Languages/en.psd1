@@ -791,7 +791,7 @@
         CSExecPreflightPassed        = 'Preflight passed: Windows RE image and configuration copies were SHA-256 verified. No partitions changed; temporary copies will be removed.'
         CSExecExplorerNotExact       = 'Explorer capacity is below the target even though partition resize succeeded.'
         CSExecRecoveryUnexpected     = 'Recovery contains unexpected item: {0}. Execution blocked.'
-        CSExecNoPlan                 = 'No supported C:/Recovery rebuild selected. No execution.'
+        CSExecNoPlan                 = 'No supported C: or Recovery operation selected. No execution.'
         CSExecHashMismatch           = 'Windows RE image SHA-256 mismatch.'
         CSExecModeWarning            = 'EXPERIMENTAL EXECUTION MODE: the plan can change the system disk after separate confirmation.'
         CSExecMountFailure           = 'Recovery temporary mount cannot be safely managed.'

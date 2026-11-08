@@ -570,7 +570,7 @@ try {
         Write-Host ($m.CS26MinimumSize -f (Format-ExactMiB ([int64]$assessment.MinRecoveryBytes)))
         Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
     } else {
-        Write-Host ($m.CS26ImageUnavailable -f $assessment.Error) -ForegroundColor Yellow
+        Write-Host ($m.CS26ImageUnavailable -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
     }
     $proposal = Get-CSPlanningDecision $disk $c $parts $reInfo $activeRecovery `
         $assessment $vol $usableBounds
