@@ -459,6 +459,11 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
     return [pscustomobject]@{ Start = [int64]$sorted[0].Offset; End = [int64]$edge }
 }
 function Read-YesNo([string]$prompt) {
+    # Visually separate the final destructive confirmation from the backup
+    # acknowledgement and other preflight output, in every language.
+    if ($prompt -eq $m.CSExecFinalConfirm -or $prompt -eq $m.CSNewFinalConfirm) {
+        Write-Host ''
+    }
     while ($true) {
         $answer = (Read-Host ($prompt + ' ' + $m.CSYesNo)).Trim().ToUpperInvariant()
         if ($answer -eq 'Y') { return $true }
@@ -623,41 +628,38 @@ try {
         Write-Host ''
         Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
         Write-Host $m.CS27ExecuteSelectionNotice -ForegroundColor Yellow
-        # One global gate, followed by the core repair choice and individually
-        # audited optional deletion choices. Each destructive action is reconfirmed.
-        if (Read-YesNo $m.CS284AskExecute) {
-            if ($canPreviewC) {
-                if ($null -eq $activeRecovery) {
-                    $optimiseC = Read-YesNo $m.CS26AskMissingRecovery
-                } elseif ($proposal.Beauty) {
-                    $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
-                } else {
-                    if ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
-                    [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
-                    [int64]$proposal.ChangeBytes -lt 0) {
-                    $optimiseC = Read-YesNo ($m.CS284AskIncreaseRecovery -f
-                        (Format-ExactMiB ([int64]$proposal.Geometry.NewSize)),
-                        (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes))))
-                } else {
-                    $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
-                }
-                }
+        # Select each operation explicitly; the actual executor performs
+        # preflight checks and obtains separate final confirmation.
+        if ($canPreviewC) {
+            if ($null -eq $activeRecovery) {
+                $optimiseC = Read-YesNo $m.CS26AskMissingRecovery
+            } elseif ($proposal.Beauty) {
+                $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f
+                    $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
+            } elseif ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
+                [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
+                [int64]$proposal.ChangeBytes -lt 0) {
+                $optimiseC = Read-YesNo ($m.CS284AskIncreaseRecovery -f
+                    (Format-ExactMiB ([int64]$proposal.Geometry.NewSize)),
+                    (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes))))
+            } else {
+                $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
             }
-            foreach ($candidate in $candidates) {
-                $details = @()
-                if (-not [string]::IsNullOrWhiteSpace($candidate.Name)) { $details += $candidate.Name }
-                $details += $candidate.Size
-                $details += $candidate.Role
-                $candidateAudit = @($candidateAudits | Where-Object {
-                    [int]$_.Number -eq [int]$candidate.PartitionNumber
-                })
-                if ($candidateAudit.Count -ne 1 -or -not $candidateAudit[0].Permitted) {
-                    Write-Host ($m.CS28BlockedSelection -f $candidate.PartitionNumber) -ForegroundColor Yellow
-                    continue
-                }
-                if (Read-YesNo ($m.CS284AskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
-                    $selected.Add([int]$candidate.PartitionNumber)
-                }
+        }
+        foreach ($candidate in $candidates) {
+            $details = @()
+            if (-not [string]::IsNullOrWhiteSpace($candidate.Name)) { $details += $candidate.Name }
+            $details += $candidate.Size
+            $details += $candidate.Role
+            $candidateAudit = @($candidateAudits | Where-Object {
+                [int]$_.Number -eq [int]$candidate.PartitionNumber
+            })
+            if ($candidateAudit.Count -ne 1 -or -not $candidateAudit[0].Permitted) {
+                Write-Host ($m.CS28BlockedSelection -f $candidate.PartitionNumber) -ForegroundColor Yellow
+                continue
+            }
+            if (Read-YesNo ($m.CS284AskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
+                $selected.Add([int]$candidate.PartitionNumber)
             }
         }
     } elseif ($null -ne $proposal) {
