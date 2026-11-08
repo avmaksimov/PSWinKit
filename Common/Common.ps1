@@ -67,6 +67,19 @@ function Test-PSWinKitPauseRequired {
     }
 }
 
+# PowerShell paths (including provider-qualified UNC paths and PSDrives) are
+# not necessarily valid arguments for System.IO or the .NET PowerShell parser.
+# FileInfo.FullName supplies the native filesystem path without evaluating code.
+function Resolve-PSWinKitLanguageFilePath {
+    param([Parameter(Mandatory = $true)][string]$File)
+    $item = Get-Item -LiteralPath $File -ErrorAction Stop
+    if ($item -isnot [IO.FileInfo] -or
+        [IO.Path]::GetExtension($item.FullName) -ine '.psd1') {
+        throw "Language file not found or not PSD1: $File"
+    }
+    return $item.FullName
+}
+
 function Find-PSWinKitLanguageFile {
     param(
         [Parameter(Mandatory = $true)][string]$Folder,
@@ -74,14 +87,12 @@ function Find-PSWinKitLanguageFile {
         [switch]$Explicit
     )
     if ($Explicit) {
-        $resolved = if ([IO.Path]::IsPathRooted($Language)) {
-            [IO.Path]::GetFullPath($Language)
-        }
-        else { [IO.Path]::GetFullPath((Join-Path $Folder $Language)) }
-        if ([IO.Path]::GetExtension($resolved) -ine '.psd1' -or -not [IO.File]::Exists($resolved)) {
-            throw "Language file not found or not PSD1: $resolved"
-        }
-        return $resolved
+        # A provider-qualified FileSystem path is absolute in PowerShell even
+        # though System.IO.Path.IsPathRooted does not recognize its prefix.
+        $candidate = if ([IO.Path]::IsPathRooted($Language) -or $Language -match '^[^:]+::') {
+            $Language
+        } else { Join-Path $Folder $Language }
+        return (Resolve-PSWinKitLanguageFilePath -File $candidate)
     }
     if ($Language) {
         try { $culture = [Globalization.CultureInfo]::GetCultureInfo($Language) }
@@ -90,20 +101,92 @@ function Find-PSWinKitLanguageFile {
     else { $culture = Get-UICulture }
     while ($culture -and $culture.Name) {
         $candidate = Join-Path $Folder ($culture.Name + '.psd1')
-        if ([IO.File]::Exists($candidate)) { return [IO.Path]::GetFullPath($candidate) }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-PSWinKitLanguageFilePath -File $candidate)
+        }
         $culture = $culture.Parent
     }
     $english = Join-Path $Folder 'en.psd1'
-    if (-not [IO.File]::Exists($english)) { throw "English language file missing: $english" }
-    return [IO.Path]::GetFullPath($english)
+    if (-not (Test-Path -LiteralPath $english -PathType Leaf)) {
+        throw "English language file missing: $english"
+    }
+    return (Resolve-PSWinKitLanguageFilePath -File $english)
+}
+
+# PSD1 is data, not executable code. PowerShell 5.1's Import-PowerShellDataFile
+# rejects files with over 500 keys; the in-memory hashtable has no such limit.
+# Use the built-in .NET PowerShell parser and accept only literal strings and
+# nested hashtables. Never evaluate the file or create a script block from it.
+function Convert-PSWinKitLanguageAst {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.Language.HashtableAst]$HashtableAst,
+        [Parameter(Mandatory = $true)][string]$File
+    )
+    $result = @{}
+    foreach ($pair in $HashtableAst.KeyValuePairs) {
+        if ($pair.Item1 -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            throw "Language key must be a literal string: $File (line $($pair.Item1.Extent.StartLineNumber))"
+        }
+        $key = [string]$pair.Item1.Value
+        if ([string]::IsNullOrEmpty($key) -or $result.ContainsKey($key)) {
+            throw "Empty or duplicate language key: $key ($File)"
+        }
+        if ($pair.Item2 -isnot [System.Management.Automation.Language.PipelineAst]) {
+            throw "Invalid language value for '$key': $File"
+        }
+        $value = $pair.Item2.GetPureExpression()
+        if ($value -is [System.Management.Automation.Language.HashtableAst]) {
+            $result[$key] = Convert-PSWinKitLanguageAst -HashtableAst $value -File $File
+        } elseif ($value -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $result[$key] = $value.Value
+        } else {
+            throw "Language value must be a literal string or hashtable: $key ($File)"
+        }
+    }
+    return $result
+}
+
+function Import-PSWinKitLanguageData {
+    param([Parameter(Mandatory = $true)][string]$File)
+
+    $File = Resolve-PSWinKitLanguageFilePath -File $File
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        $File, [ref]$tokens, [ref]$parseErrors)
+    if ($null -eq $ast -or $parseErrors.Count -gt 0) {
+        $details = if ($parseErrors.Count -gt 0) { [string]$parseErrors[0].Message } else { 'Unknown parser error.' }
+        throw "Invalid PSD1 language file: $File. $details"
+    }
+    # Exactly one hashtable literal is allowed at file scope.
+    if ($null -ne $ast.ParamBlock -or $null -ne $ast.BeginBlock -or
+        $null -ne $ast.ProcessBlock -or $null -ne $ast.DynamicParamBlock -or
+        $null -eq $ast.EndBlock -or $ast.EndBlock.Statements.Count -ne 1 -or
+        $ast.EndBlock.Statements[0] -isnot [System.Management.Automation.Language.PipelineAst]) {
+        throw "Expected one PSD1 hashtable and no executable statements: $File"
+    }
+    $expression = $ast.EndBlock.Statements[0].GetPureExpression()
+    if ($expression -isnot [System.Management.Automation.Language.HashtableAst]) {
+        throw "Expected one PSD1 hashtable: $File"
+    }
+    return (Convert-PSWinKitLanguageAst -HashtableAst $expression -File $File)
 }
 
 function Import-PSWinKitTranslations {
     param([string]$Folder, [string]$SelectedFile, [string]$Section, [switch]$RequireTitle)
-    $fallbackFile = Join-Path $Folder 'en.psd1'
-    if (-not [IO.File]::Exists($fallbackFile)) { throw "English language file missing: $fallbackFile" }
-    $fallback = Import-PowerShellDataFile -LiteralPath $fallbackFile -ErrorAction Stop
-    $selected = Import-PowerShellDataFile -LiteralPath $SelectedFile -ErrorAction Stop
+    $fallbackCandidate = Join-Path $Folder 'en.psd1'
+    if (-not (Test-Path -LiteralPath $fallbackCandidate -PathType Leaf)) {
+        throw "English language file missing: $fallbackCandidate"
+    }
+    $fallbackFile = Resolve-PSWinKitLanguageFilePath -File $fallbackCandidate
+    $SelectedFile = Resolve-PSWinKitLanguageFilePath -File $SelectedFile
+    $fallback = Import-PSWinKitLanguageData -File $fallbackFile
+    $selected = if ($SelectedFile -ieq $fallbackFile) {
+        $fallback
+    } else {
+        Import-PSWinKitLanguageData -File $SelectedFile
+    }
     if (-not ($fallback -is [hashtable]) -or -not ($selected -is [hashtable])) {
         throw "Invalid translation table: $SelectedFile"
     }
