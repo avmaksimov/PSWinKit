@@ -92,13 +92,82 @@ function Assert-CSPendingRebootClear {
 }
 
 function Assert-CSBitLockerOff {
-    $cmd = Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue
-    if ($null -eq $cmd) { throw $m.CSExecBitLockerUnknown }
-    $bl = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop
-    if ($null -eq $bl) { throw $m.CSExecBitLockerUnknown }
-    if (([string]$bl.VolumeStatus -notin @('FullyDecrypted','0')) -or
-        ([string]$bl.ProtectionStatus -notin @('Off','0'))) {
-        throw $m.CSExecBitLockerBlocked
+    # Prefer the BitLocker module if available. If its status cannot be read,
+    # check the encryption provider directly through WMI (PowerShell 5.1).
+    $moduleFailure = $m.CSBitLockerCmdletMissing
+    $bitLockerCommand = Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue
+    if ($null -ne $bitLockerCommand) {
+        try {
+            $bl = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop
+            if ($null -ne $bl) {
+                $volumeStatus = [string]$bl.VolumeStatus
+                $protectionStatus = [string]$bl.ProtectionStatus
+                if ($volumeStatus -in @('FullyDecrypted', '0') -and
+                    $protectionStatus -in @('Off', '0')) { return }
+                if ($volumeStatus -in @('FullyEncrypted', 'EncryptionInProgress',
+                    'DecryptionInProgress', 'EncryptionPaused', 'DecryptionPaused',
+                    '1', '2', '3', '4', '5') -or
+                    $protectionStatus -in @('On', '1')) {
+                    throw $m.CSExecBitLockerBlocked
+                }
+                $moduleFailure = $m.CSBitLockerCmdletStatusUnknown -f $volumeStatus, $protectionStatus
+            } else {
+                $moduleFailure = $m.CSBitLockerCmdletNoVolume
+            }
+        } catch {
+            if ($_.Exception.Message -eq $m.CSExecBitLockerBlocked) { throw }
+            $moduleFailure = $_.Exception.Message
+        }
+    }
+
+    try {
+        $ns = 'root\CIMV2\Security\MicrosoftVolumeEncryption'
+        $volumes = @(Get-CimInstance -Namespace $ns -ClassName Win32_EncryptableVolume `
+            -Filter "DriveLetter='C:'" -ErrorAction Stop)
+        if ($volumes.Count -ne 1) {
+            throw ($m.CSBitLockerWmiVolumeCount -f $volumes.Count)
+        }
+        $conversion = Invoke-CimMethod -InputObject $volumes[0] -MethodName GetConversionStatus `
+            -Arguments @{ PrecisionFactor = [uint32]0 } -ErrorAction Stop
+        $protection = Invoke-CimMethod -InputObject $volumes[0] -MethodName GetProtectionStatus `
+            -ErrorAction Stop
+        if ([uint32]$conversion.ReturnValue -ne 0 -or
+            [uint32]$protection.ReturnValue -ne 0) {
+            throw ($m.CSBitLockerWmiMethodsFailed -f $conversion.ReturnValue, $protection.ReturnValue)
+        }
+        # 0/0 is the only acceptable state: fully decrypted, protection off.
+        # Protection off alone is not proof that the volume is decrypted.
+        if ([uint32]$conversion.ConversionStatus -ne 0 -or
+            [uint32]$protection.ProtectionStatus -ne 0) {
+            throw $m.CSExecBitLockerBlocked
+        }
+    } catch {
+        if ($_.Exception.Message -eq $m.CSExecBitLockerBlocked) { throw }
+        $wmiError = $_
+        # On Windows Server, the BitLocker WMI namespace is not registered until
+        # the BitLocker feature is installed. Treat ONLY the exact combination of
+        # a missing cmdlet, an absent WMI namespace and a verified uninstalled
+        # server feature as non-applicable; any other failure remains blocking.
+        $noWmiNamespace = (([string]$wmiError.Exception.StatusCode -eq 'InvalidNamespace') -or
+            ([int64]$wmiError.Exception.HResult -eq -2147217394))
+        if ($null -eq $bitLockerCommand -and $noWmiNamespace) {
+            try {
+                $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+                if ([int]$os.ProductType -in @(2, 3) -and
+                    $null -ne (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue)) {
+                    $features = @(Get-WindowsFeature -Name 'BitLocker' -ErrorAction Stop)
+                    if ($features.Count -eq 1 -and
+                        [string]$features[0].InstallState -eq 'Available') {
+                        Write-Host $m.CSBitLockerFeatureNotInstalled -ForegroundColor Yellow
+                        return
+                    }
+                }
+            } catch {
+                # Fail closed if OS/feature state cannot be independently read.
+            }
+        }
+        throw ($m.CSExecBitLockerUnknown + ' ' +
+            ($m.CSBitLockerCheckDetails -f $moduleFailure, $wmiError.Exception.Message))
     }
 }
 
