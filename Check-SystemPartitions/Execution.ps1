@@ -258,7 +258,7 @@ function Save-CSWim($disk, $recovery) {
                 $script:CSExecCurrentVolumeSize = [int64]$currentVolume.Size
                 $script:CSExecCurrentVolumeFree = [int64]$currentVolume.SizeRemaining
                 Write-Host ($m.CSExecSizeCurrentFree -f
-                    (Format-ExactMiB ([int64]$currentVolume.SizeRemaining))) -ForegroundColor DarkGray
+                    (Format-DetailedSize ([int64]$currentVolume.SizeRemaining))) -ForegroundColor DarkGray
             }
         } catch {
             # Some Windows versions do not expose free space for hidden Recovery volumes.
@@ -472,21 +472,21 @@ function Invoke-CSCRecoveryExecution {
         $requiredFree = [int64](250MB)
         $requiredRe = [int64]($usedBytes + $requiredFree + $volumeDifference)
         Write-Host $m.CSExecSizeHeader -ForegroundColor Cyan
-        Write-Host ($m.CSExecSizeImage -f (Format-ExactMiB $wimBytes))
-        Write-Host ($m.CSExecSizeExtras -f (Format-ExactMiB $extraBytes))
-        Write-Host ($m.CSExecSizeMeasured -f (Format-ExactMiB $usedBytes),
-            (Format-ExactMiB $currentFree))
-        Write-Host ($m.CSExecReTarget -f (Format-ExactMiB ([int64]$RebuildGeometry.NewSize)),
-            (Format-ExactMiB $fallbackSize))
-        Write-Host ($m.CSExecSizeForecast -f (Format-ExactMiB $targetFree),
-            (Format-ExactMiB $fallbackFree))
-        Write-Host ($m.CSExecSizeRequiredFree -f (Format-ExactMiB $requiredFree))
+        Write-Host ($m.CSExecSizeImage -f (Format-DetailedSize $wimBytes))
+        Write-Host ($m.CSExecSizeExtras -f (Format-DetailedSize $extraBytes))
+        Write-Host ($m.CSExecSizeMeasured -f (Format-DetailedSize $usedBytes),
+            (Format-DetailedSize $currentFree))
+        Write-Host ($m.CSExecReTarget -f (Format-DetailedSize ([int64]$RebuildGeometry.NewSize)),
+            (Format-DetailedSize $fallbackSize))
+        Write-Host ($m.CSExecSizeForecast -f (Format-DetailedSize $targetFree),
+            (Format-DetailedSize $fallbackFree))
+        Write-Host ($m.CSExecSizeRequiredFree -f (Format-DetailedSize $requiredFree))
         # The preview includes a conservative fallback to a MiB-aligned size.
         # Both choices must meet the minimum free-space requirement.
         if ($targetFree -lt $requiredFree -or $fallbackFree -lt $requiredFree) {
             $deficit = [int64]([math]::Max([double]($requiredFree - $targetFree),
                 [double]($requiredFree - $fallbackFree)))
-            Write-Host ($m.CSExecSizeShortfall -f (Format-ExactMiB $deficit)) -ForegroundColor Yellow
+            Write-Host ($m.CSExecSizeShortfall -f (Format-DetailedSize $deficit)) -ForegroundColor Yellow
             throw $m.CSExecRecoveryTooSmall
         }
         Write-Host ($m.CSExecStagedAt -f $stageWim) -ForegroundColor DarkGray
@@ -499,8 +499,8 @@ function Invoke-CSCRecoveryExecution {
         # to risk deletion without knowing the final filesystem overhead.
         $executionFloor = [int64](250MB + 16MB)
         if ($targetFree -lt $executionFloor -or $fallbackFree -lt $executionFloor) {
-            Write-Host ($m.CS27SafetyMargin -f (Format-ExactMiB $executionFloor),
-                (Format-ExactMiB ([int64][math]::Min($targetFree,$fallbackFree)))) -ForegroundColor Yellow
+            Write-Host ($m.CS27SafetyMargin -f (Format-DetailedSize $executionFloor),
+                (Format-DetailedSize ([int64][math]::Min($targetFree,$fallbackFree)))) -ForegroundColor Yellow
             throw $m.CSExecRecoveryTooSmall
         }
         Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
@@ -825,8 +825,8 @@ function Invoke-CSCreateMissingRecovery {
             [double]($wimBytes + 250MB + 64MB + 16MB))
         $fallbackSize = Align-DownMiB ([int64]$RebuildGeometry.NewSize)
         if ($fallbackSize -lt $required) { throw $m.CSExecRecoveryTooSmall }
-        $reSizeText = Format-ExactMiB ([int64]$RebuildGeometry.NewSize)
-        $wimSizeText = Format-ExactMiB $wimBytes
+        $reSizeText = Format-DetailedSize ([int64]$RebuildGeometry.NewSize)
+        $wimSizeText = Format-DetailedSize $wimBytes
         Write-Host ($m.CSNewPreflightPassed -f $reSizeText, $wimSizeText) -ForegroundColor Green
         Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
         if (-not (Read-YesNo $m.CSExecBackupConfirmed)) {

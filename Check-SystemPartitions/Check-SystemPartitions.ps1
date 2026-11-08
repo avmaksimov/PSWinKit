@@ -79,8 +79,7 @@ function Format-FreeSpaceSize([int64]$bytes) {
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
-function Format-ExactMiB([int64]$bytes) {
-    # Keep the historical function name for callers; display GiB for sizes of 1 GiB or more.
+function Format-DetailedSize([int64]$bytes) {
     if ($bytes -ge $script:GiB) {
         return ($m.CSSizeGiB -f ([math]::Round($bytes / [double]$script:GiB, 2)))
     }
@@ -504,8 +503,8 @@ function Show-CSFinalSummary {
     if ($null -ne $liveActive) {
         $reVolume = Get-Volume -Partition $liveActive -ErrorAction Stop
         Write-Host ($m.CSFinalRE -f $liveActive.PartitionNumber,
-            (Format-ExactMiB ([int64]$liveActive.Size)),
-            (Format-ExactMiB ([int64]$reVolume.SizeRemaining)))
+            (Format-DetailedSize ([int64]$liveActive.Size)),
+            (Format-DetailedSize ([int64]$reVolume.SizeRemaining)))
         if ([int64]$reVolume.SizeRemaining -lt [int64]250MB) {
             Write-Host $m.CSFinalFreeWarning -ForegroundColor Yellow
         }
@@ -574,11 +573,11 @@ try {
     try { $vol = Get-Volume -DriveLetter C -ErrorAction Stop } catch { }
     if ($assessment.Verified) {
         Write-Host ($m.CS26ImageSource -f $assessment.Source)
-        Write-Host ($m.CS26ImageSize -f (Format-ExactMiB $assessment.WIMBytes))
+        Write-Host ($m.CS26ImageSize -f (Format-DetailedSize $assessment.WIMBytes))
         if ($null -ne $assessment.FreeBytes) {
-            Write-Host ($m.CS26CurrentFree -f (Format-ExactMiB ([int64]$assessment.FreeBytes)))
+            Write-Host ($m.CS26CurrentFree -f (Format-DetailedSize ([int64]$assessment.FreeBytes)))
         }
-        Write-Host ($m.CS26MinimumSize -f (Format-ExactMiB ([int64]$assessment.MinRecoveryBytes)))
+        Write-Host ($m.CS26MinimumSize -f (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes)))
         Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
     } else {
         Write-Host ($m.CS26ImageUnavailable -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
@@ -646,8 +645,8 @@ try {
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
                 [int64]$proposal.ChangeBytes -lt 0) {
                 $optimiseC = Read-YesNo ($m.CSAskIncreaseRecovery -f
-                    (Format-ExactMiB ([int64]$proposal.Geometry.NewSize)),
-                    (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes))))
+                    (Format-DetailedSize ([int64]$proposal.Geometry.NewSize)),
+                    (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes))))
             } else {
                 $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
             }
@@ -687,7 +686,7 @@ try {
         # The active Recovery is temporary removed/recreated only as part
         # of THIS combined operation, never an independent deletion choice.
         if ($null -eq $activeRecovery) {
-            Write-Host ($m.CS26PlanCreate -f (Format-ExactMiB $proposal.MinimumRecoveryBytes))
+            Write-Host ($m.CS26PlanCreate -f (Format-DetailedSize $proposal.MinimumRecoveryBytes))
             if ($proposal.ChangeBytes -ne 0) {
                 Write-Host ($m.CS26PlanCChange -f $operation, $changeLabel)
             }
@@ -700,7 +699,7 @@ try {
                 Write-Host ($m.CS26PlanTechnical -f $operation, $changeLabel, $activeRecovery.PartitionNumber)
             }
             Write-Host ($m.CSPlanRebuildRE -f $activeRecovery.PartitionNumber,
-                (Format-ExactMiB $rebuildGeometry.OldSize), (Format-ExactMiB $rebuildGeometry.NewSize))
+                (Format-DetailedSize $rebuildGeometry.OldSize), (Format-DetailedSize $rebuildGeometry.NewSize))
         }
         if ([int64]$rebuildGeometry.AbsorbedGapBytes -gt 0) {
             Write-Host ($m.CSPlanAbsorbGap -f (Format-FreeSpaceSize ([int64]$rebuildGeometry.AbsorbedGapBytes))) -ForegroundColor DarkGray
@@ -716,14 +715,14 @@ try {
         if ($proposal.ChangeBytes -lt 0) {
             # Get-PartitionSupportedSize may take time on a live Windows volume.
             # Report progress BEFORE the blocking Storage API call.
-            Write-Host ($m.CSCheckingShrinkSize -f (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
+            Write-Host ($m.CSCheckingShrinkSize -f (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
             try {
                 $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
                 if ($plannedCSize -lt [int64]$supported.SizeMin) {
                     Write-Host ($m.CSPlanShrinkBlocked -f (Format-PartitionSize ([int64]$supported.SizeMin))) -ForegroundColor Yellow
                     # The preview geometry remains conditional, not executable.
                 } else {
-                    Write-Host ($m.CSCheckedShrinkSize -f (Format-ExactMiB ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
+                    Write-Host ($m.CSCheckedShrinkSize -f (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
                 }
             } catch { Write-Host $m.CSPlanSupportedSizeUnknown -ForegroundColor Yellow }
         }
