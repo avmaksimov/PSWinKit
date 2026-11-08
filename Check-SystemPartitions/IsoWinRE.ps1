@@ -215,7 +215,9 @@ function Get-CSISOImage {
         $entry = ('{0}\Windows\System32\Recovery\Winre.wim' -f $index)
         Write-Host $m.CSIsoTrying7Zip -ForegroundColor DarkGray
         try {
-            & $zip 'e' $source $entry ("-o$wimDirectory") '-y'
+            # Native stdout is NOT part of the function result.
+            # Only the final verified Winre.wim path may enter the pipeline.
+            & $zip 'e' $source $entry ("-o$wimDirectory") '-y' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', $LASTEXITCODE) }
             Assert-CSWim $destination
         } catch {
@@ -235,7 +237,7 @@ function Get-CSISOImage {
             Write-Host $m.CSIsoExportingESD -ForegroundColor DarkGray
             Invoke-CSExternal 'dism.exe' @('/English','/Export-Image',
                 "/SourceImageFile:$source", "/SourceIndex:$index",
-                "/DestinationImageFile:$image", '/Compress:max', '/CheckIntegrity')
+                "/DestinationImageFile:$image", '/Compress:max', '/CheckIntegrity') | Out-Null
             $index = 1
         }
         $mount = Join-Path $script:CSISOStageDir 'Mount'
@@ -244,13 +246,13 @@ function Get-CSISOImage {
         $script:CSISOMounted = $true  # conservative until a successful unmount
         try {
             Invoke-CSExternal 'dism.exe' @('/English','/Mount-Image',
-                "/ImageFile:$image", "/Index:$index", "/MountDir:$mount", '/ReadOnly')
+                "/ImageFile:$image", "/Index:$index", "/MountDir:$mount", '/ReadOnly') | Out-Null
             $inside = Join-Path $mount 'Windows\System32\Recovery\Winre.wim'
             if (-not [IO.File]::Exists($inside)) { throw $m.CSIsoWinreMissing }
             Copy-Item -LiteralPath $inside -Destination $destination -Force -ErrorAction Stop
         } finally {
             Write-Host $m.CSIsoUnmounting -ForegroundColor DarkGray
-            & dism.exe /English /Unmount-Image "/MountDir:$mount" /Discard
+            & dism.exe /English /Unmount-Image "/MountDir:$mount" /Discard | Out-Null
             if ($LASTEXITCODE -eq 0) { $script:CSISOMounted = $false }
             else { throw $m.CSIsoUnmountFailed }
         }
