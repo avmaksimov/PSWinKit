@@ -115,21 +115,89 @@ function Get-CSSevenZipPath {
     return $null
 }
 
+function Get-CSMountedInstallationImages {
+    # Win32_CDROMDrive also sees installation ISOs attached by the hypervisor.
+    # Get-DiskImage alone does NOT identify a host-mounted virtual DVD in a guest.
+    $images = New-Object 'System.Collections.Generic.List[object]'
+    try {
+        $drives = @(Get-CimInstance -ClassName Win32_CDROMDrive -ErrorAction Stop)
+    } catch {
+        # Discovery is optional: retain the manual drive-letter fallback.
+        return @()
+    }
+    foreach ($drive in $drives) {
+        $letter = ([string]$drive.Drive).Trim().TrimEnd(':').ToUpperInvariant()
+        if ($letter -notmatch '^[A-Z]$') { continue }
+
+        # A CD/DVD device is not sufficient: it must contain Windows setup media.
+        $source = $null
+        foreach ($name in @('sources\install.wim', 'sources\install.esd')) {
+            $candidate = "$letter`:\$name"
+            if ([IO.File]::Exists($candidate)) { $source = $candidate; break }
+        }
+        if (-not $source) { continue }
+
+        # Native mounted ISO: prefer its filename. Hyper-V guest virtual DVDs
+        # may expose only a volume label, so use that if Get-DiskImage fails.
+        $label = ''
+        try {
+            $diskImage = Get-DiskImage -DevicePath ([string]$drive.DeviceID) -ErrorAction Stop
+            if ($diskImage.Attached -and ([string]$diskImage.ImagePath) -match '(?i)\.iso$') {
+                $label = [IO.Path]::GetFileName([string]$diskImage.ImagePath)
+            }
+        } catch { }
+        if (-not $label) {
+            try {
+                $volume = Get-Volume -DriveLetter ([char]$letter) -ErrorAction Stop
+                $label = [string]$volume.FileSystemLabel
+            } catch { }
+        }
+        if (-not $label) { $label = [string]$drive.Name }
+
+        $images.Add([pscustomobject]@{
+            Letter = $letter; Name = $label; Source = $source
+        })
+    }
+    return @($images.ToArray() | Sort-Object Letter)
+}
+
 function Get-CSISOImage {
     if ($script:CSISOImagePath -and [IO.File]::Exists($script:CSISOImagePath)) {
         return $script:CSISOImagePath
     }
-    Write-Host $m.CSIsoNeeded -ForegroundColor Yellow
-    $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().TrimEnd(':').ToUpperInvariant()
-    if (-not $letter) { return $null }
-    if ($letter -notmatch '^[A-Z]$') { throw $m.CSIsoInvalidLetter }
 
+    $mounted = @(Get-CSMountedInstallationImages)
     $source = $null
-    foreach ($name in @('sources\install.wim','sources\install.esd')) {
-        $candidate = "$letter`:\$name"
-        if ([IO.File]::Exists($candidate)) { $source = $candidate; break }
+    if ($mounted.Count -eq 1) {
+        # One installation ISO/DVD: no drive selection is needed.
+        $source = $mounted[0].Source
+    } elseif ($mounted.Count -gt 1) {
+        # Choose the installation medium first; only then inspect its indexes.
+        Write-Host ''
+        Write-Host ($m.CSIsoInstallFile -f '') -ForegroundColor Gray
+        for ($i = 0; $i -lt $mounted.Count; $i++) {
+            Write-Host ('  [{0}] {1}:  {2}' -f ($i + 1), $mounted[$i].Letter, $mounted[$i].Name)
+        }
+        do {
+            $selection = (Read-Host ('{0} (1-{1})' -f $m.CSIsoColumnIndex, $mounted.Count)).Trim()
+            if (-not $selection) { return $null }
+            $number = 0
+            $valid = [int]::TryParse($selection, [ref]$number) -and
+                $number -ge 1 -and $number -le $mounted.Count
+        } while (-not $valid)
+        $source = $mounted[$number - 1].Source
+    } else {
+        # No mounted Windows installation media: keep manual input available.
+        Write-Host $m.CSIsoNeeded -ForegroundColor Yellow
+        $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().TrimEnd(':').ToUpperInvariant()
+        if (-not $letter) { return $null }
+        if ($letter -notmatch '^[A-Z]$') { throw $m.CSIsoInvalidLetter }
+        foreach ($name in @('sources\install.wim', 'sources\install.esd')) {
+            $candidate = "$letter`:\$name"
+            if ([IO.File]::Exists($candidate)) { $source = $candidate; break }
+        }
+        if (-not $source) { throw ($m.CSIsoInstallMissing -f $letter) }
     }
-    if (-not $source) { throw ($m.CSIsoInstallMissing -f $letter) }
     Write-Host ($m.CSIsoInstallFile -f $source)
     $index = Select-CSISOImageIndex $source
 
