@@ -1,6 +1,6 @@
 # PSWinKit — PowerShell utility development contract
 
-This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Check-Windows`, `Check-WinRE`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
+This file is both the documentation for `Common/Common.ps1` and the mandatory contract for `Remove-Paths`, `Check-Windows`, `Check-WinRE`, `Check-SystemPartitions`, the installer and all future PSWinKit utilities. Russian equivalent: [README.ru.md](README.ru.md).
 
 ## 1. Scope and design principles
 
@@ -64,7 +64,7 @@ Running without any parameters is mandatory:
 .\Remove-Paths.ps1
 ```
 
-Own optional parameters such as `[string[]]$Paths` or `[switch]$DryRun` are allowed. Main utilities **do not need to declare** `LanguageFile`, `PauseOnExit`, `RequireAdministrator` or `ScriptArguments` just for Common. The last name is not a Common API parameter.
+Own optional parameters such as `[string[]]$Paths` or `[switch]$DryRun` are allowed. Main utilities **do not need to declare** `LanguageFile` or `RequireAdministrator` just for Common. `PauseOnExit` and `ScriptArguments` are not public Common API parameters; the internal `$utility.PauseOnExit` property remains available to utilities.
 
 For UAC relaunch, Common obtains the **direct caller script's** `$PSBoundParameters` via `Get-Variable -Name PSBoundParameters -Scope 1`, at the very beginning of `Start-Utility`. Therefore `Start-Utility` must be called **at top level in the main script**, never from an extra wrapper function.
 
@@ -97,7 +97,6 @@ For a utility that does not need elevation, omit `-RequireAdministrator`.
 | `ScriptPath` | `[string]` | Yes | — |
 | `RequireAdministrator` | `[switch]` | No | `$false` |
 | `LanguageFile` | `[string]` | No | Unspecified |
-| `PauseOnExit` | `[switch]` | No | `$false` |
 
 `ScriptPath` is the main script's `$PSCommandPath`. It determines the utility section (script basename), the title and UAC relaunch target. No `Utility`, `Program` or `Section` parameter is used.
 
@@ -105,7 +104,7 @@ For a utility that does not need elevation, omit `-RequireAdministrator`.
 
 **LanguageFile.** Optional developer-level override when calling `Start-Utility`. By default, `Get-UICulture` determines the file: specific culture (`ru-RU.psd1`) → parent (`ru.psd1`) → required `en.psd1`. Explicit relative paths are resolved against **Common/Languages**. A missing file or non-PSD1 path is an initialization error. Preserve the chosen file across UAC even if another account has a different Windows UI language. A main utility need not expose its own `-LanguageFile` parameter.
 
-**PauseOnExit.** Optional forced final pause. Pausing is also mandatory for interactive windows opened by Common through UAC; an existing terminal should not pause unnecessarily. Detection of launches from Explorer is best-effort only. Noninteractive usage should not intentionally block. UAC cancellation causes no pause.
+**Final pause.** There is no public `-PauseOnExit` parameter. `Start-Utility` sets `$utility.PauseOnExit` automatically: **pause by default** unless the current PowerShell command line reliably proves that the process is an interactive shell that will stay open (including explicit `-NoExit`). Known noninteractive launches do not pause. A one-shot `-File`, `-Command` or `-EncodedCommand` launch pauses. Unknown launch options, an unavailable command line, and process-query errors keep the pause enabled. Parent process `explorer.exe` alone is never proof that a window will close. A utility may explicitly override the internal property, e.g. `$utility.PauseOnExit = $false` before reboot. Canceling UAC causes no pause.
 
 **Return value.** On success, return `$utility`, holding `StartedAt`, a timer, `Messages`, the selected language, and pause state. If execution is delegated to an elevated process or UAC is canceled, return `$null`: the original script must return immediately **without its summary or Stop-Utility**. Other initialization errors are reported separately.
 
@@ -127,7 +126,7 @@ One blank line follows these two lines. The utility must not print another commo
 2. If elevation is needed, capture the main script's explicitly bound parameters directly in `Start-Utility` and validate supported types.
 3. Serialize arguments with `System.Management.Automation.PSSerializer`, preserving their values and types.
 4. Build a command that invokes the **same main PS1**, keeping filenames, strings and parameters out of executable source. `powershell.exe -EncodedCommand` with UTF-16LE is allowed; Base64 is **not encryption**.
-5. Use `Start-Process -Verb RunAs` with the same PowerShell architecture; reconstruct values using splatting. Carry the selected language and pause state through Common's internal mechanism, not new mandatory main-script arguments.
+5. Use `Start-Process -Verb RunAs` with the same PowerShell architecture; reconstruct values using splatting. Preserve the selected language through Common's internal mechanism; pause is recalculated in the elevated process, without adding main-script arguments.
 6. The original process returns `$null` after successful launch. The elevated script dot-sources Common and calls `Start-Utility` again.
 
 Security rules: no `Invoke-Expression`, no unescaped user strings inserted as code, support spaces, apostrophes, quotes and non-ASCII paths, check command length, and avoid temporary files where possible. Never pass secrets on the command line. Keep x86/x64 architecture unchanged unless there is a specific need; preserve working directory where possible, noting that mapped network drives may not exist in the elevated context. **Do not use `-ExecutionPolicy Bypass` or override PowerShell execution policies.** The elevated utility must revalidate destructive inputs and protected paths.
@@ -168,7 +167,7 @@ Finished: 10/31/2026 10:43:12 PM
 Duration: 00:00:33
 ```
 
-Date/time and duration follow section 9. The word “Finished” is neutral; it does not assert that every action succeeded. Results, errors and numeric statistics are emitted by the utility itself **before** calling `Stop-Utility`. Any necessary final pause follows these two lines. Common does not print an additional summary.
+Date/time and duration follow section 9. The word “Finished” is neutral; it does not assert that every action succeeded. Results, errors and numeric statistics are emitted by the utility itself **before** calling `Stop-Utility`. A final keypress prompt follows these lines only when `$utility.PauseOnExit` is true. `Stop-Utility` reads a keyboard key (falling back to Enter only when raw key input is unavailable). Common does not print an additional summary.
 
 Call `Stop-Utility` only after a successful `Start-Utility`, preferably in `finally`. An ordinary Ctrl+C may still unwind through `finally`; forcibly killing the process cannot guarantee execution.
 

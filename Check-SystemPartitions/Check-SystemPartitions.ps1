@@ -5,8 +5,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$LanguageFile,
-    [switch]$PauseOnExit
+    [string]$LanguageFile
 )
 
 Set-StrictMode -Version 2.0
@@ -15,10 +14,11 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
 $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator `
-    -LanguageFile $LanguageFile -PauseOnExit:$PauseOnExit
+    -LanguageFile $LanguageFile
 if ($null -eq $utility) { return }
 $m = $utility.Messages
 . (Join-Path $PSScriptRoot 'Execution.ps1')
+. (Join-Path $PSScriptRoot 'IsoWinRE.ps1')
 . (Join-Path $PSScriptRoot 'Planning.ps1')
 . (Join-Path $PSScriptRoot 'Cleanup.ps1')
 
@@ -31,8 +31,6 @@ $script:KiB = [int64]1024
 $script:RecoveryGuid = 'DE94BBA4-06D1-4D40-A16A-BFD50179D6AC'
 $script:EfiGuid = 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
 $script:MsrGuid = 'E3C9E316-0B5C-4DB8-817D-F92DF00215AE'
-$script:Failed = $false
-
 function Format-PartitionSize([int64]$bytes) {
     if ($bytes -ge $script:GiB) { return ($m.CSSizeGiB -f ([math]::Round($bytes / $script:GiB, 2))) }
     if ($bytes -ge $script:MiB) { return ($m.CSSizeMiB -f ([math]::Round($bytes / $script:MiB, 0))) }
@@ -173,7 +171,7 @@ function Test-RecoveryPartition($part, [string]$style) {
     return ($type -match '^(Recovery|0x27)$' -or $mbr -match '^(Recovery|0x27)$')
 }
 function Get-WinReSnapshot {
-    $output = (& reagentc.exe /info 2>&1 | Out-String)
+    $output = (& cmd.exe /d /c 'reagentc.exe /info 2>&1' | Out-String)
     if ($LASTEXITCODE -ne 0) { throw ($m.ReInfoFailed -f $output) }
     $status = [regex]::Match($output,
       '(?im)^\s*[^:\r\n]+:\s*(Enabled|Disabled|\u0412\u043a\u043b\u044e\u0447\u0435\u043d\u043e|\u041e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u043e)\s*$')
@@ -673,7 +671,7 @@ try {
             Write-Host ($m.CSPlanAbsorbGap -f (Format-FreeSpaceSize ([int64]$rebuildGeometry.AbsorbedGapBytes))) -ForegroundColor DarkGray
         }
         if ($null -eq $activeRecovery) {
-            Write-Host $m.CS26MissingExecutionUnsupported -ForegroundColor Yellow
+            Write-Host $m.CSNewCreateOrder -ForegroundColor DarkGray
         } elseif ($proposal.ChangeBytes -gt 0) {
             Write-Host $m.CSPlanOrderGrow
         } else {
@@ -771,15 +769,17 @@ try {
     $invalid = @($selectedAudits | Where-Object { -not $_.Permitted })
     if ($selectedAudits.Count -ne $selected.Count -or $invalid.Count -gt 0) {
         Write-Host $m.CS28BlockedExecutionSelection -ForegroundColor Red
-    } elseif ($optimiseC -and $null -eq $activeRecovery) {
-        # A missing or unregistered Recovery has only a diagnostic preview.
-        Write-Host $m.CS26MissingExecutionUnsupported -ForegroundColor Yellow
     } else {
         $coreSucceeded = $false
         if ($optimiseC) {
-            Invoke-CSCRecoveryExecution -Disk $disk -C $c -Parts $parts `
-                -ActiveRecovery $activeRecovery -ReInfo $reInfo -Proposal $proposal `
-                -RebuildGeometry $rebuildGeometry
+            if ($null -eq $activeRecovery) {
+                Invoke-CSCreateMissingRecovery -Disk $disk -C $c -Parts $parts `
+                    -ReInfo $reInfo -Proposal $proposal -RebuildGeometry $rebuildGeometry
+            } else {
+                Invoke-CSCRecoveryExecution -Disk $disk -C $c -Parts $parts `
+                    -ActiveRecovery $activeRecovery -ReInfo $reInfo -Proposal $proposal `
+                    -RebuildGeometry $rebuildGeometry
+            }
             $coreSucceeded = [bool]$script:CSExecLastSucceeded
         } elseif ($selectedAudits.Count -gt 0) {
             # Optional cleanup can be performed without rebuilding active Recovery.
@@ -804,12 +804,12 @@ try {
     }
 }
 catch {
-    $script:Failed = $true
     Write-Host ''
     Write-Host ('=== ' + $m.ErrorSection + ' ===') -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
 }
 finally {
+    # ISO staging may contain WinRE rescue material after a failed disk change.
+    Clear-CSISOStage
     Stop-Utility -Utility $utility
 }
-if ($script:Failed) { throw $m.Failed }

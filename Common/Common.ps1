@@ -14,17 +14,57 @@ function Test-PSWinKitAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Test-PSWinKitStandalone {
-    # Best effort only; Explorer launches normally need a final pause.
-    try {
-        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
-        if (-not $current -or -not $current.ParentProcessId) { return $false }
-        $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction Stop
-        if (-not $parent) { return $false }
-        if ([datetime]$parent.CreationDate -gt [datetime]$current.CreationDate) { return $false }
-        return ($parent.Name -ieq 'explorer.exe')
+function Test-PSWinKitSkipPause([string]$CommandLine) {
+    # Be conservative: return true only for a proven interactive shell, an
+    # explicit -NoExit launch or a -NonInteractive process that cannot read keys.
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+    $launch = [regex]::Match($CommandLine,
+        '^\s*(?:"[^"]+"|\S+)(?:\s+(?<Options>.*))?\s*$')
+    if (-not $launch.Success) { return $false }
+    $remaining = [string]$launch.Groups['Options'].Value
+    $noExit = $false
+    while ($true) {
+        $remaining = $remaining.TrimStart()
+        if (-not $remaining) { return $true }
+        $option = [regex]::Match($remaining,
+            '(?i)^-(?<Name>[a-z][a-z0-9-]*)(?=\s|:|$)')
+        if (-not $option.Success) { return $false }
+        $name = $option.Groups['Name'].Value
+        $remaining = $remaining.Substring($option.Length)
+        if ($name -match '^(NoExit)$') {
+            $noExit = $true
+            continue
+        }
+        if ($name -match '^(NonInteractive)$') { return $true }
+        if ($name -match '^(File|F|Command|C|EncodedCommand|EncodedComman|Enc|E)$') {
+            return $noExit
+        }
+        if ($name -match '^(NoProfile|NoLogo|Sta|Mta)$') { continue }
+        if ($name -match '^(ExecutionPolicy|Ep|InputFormat|OutputFormat|Version|WorkingDirectory)$') {
+            # Consume the option value; if it cannot be identified, keep the pause.
+            $value = [regex]::Match($remaining,
+                '^\s*:?(?:"[^"]+"|[^-\s:]\S*)')
+            if (-not $value.Success) { return $false }
+            $valueText = $value.Value.TrimStart() -replace '^:', ''
+            if ($valueText -match '^"?-') { return $false }
+            $remaining = $remaining.Substring($value.Length)
+            continue
+        }
+        return $false
     }
-    catch { return $false }
+}
+
+function Test-PSWinKitPauseRequired {
+    # Fail-safe default is to pause. Avoid blocking noninteractive hosts.
+    if (-not [Environment]::UserInteractive) { return $false }
+    try {
+        if ($Host.Name -ine 'ConsoleHost') { return $true }
+        $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+        if ($null -eq $process) { return $true }
+        return (-not (Test-PSWinKitSkipPause ([string]$process.CommandLine)))
+    } catch {
+        return $true
+    }
 }
 
 function Find-PSWinKitLanguageFile {
@@ -209,8 +249,7 @@ function Start-Utility {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [switch]$RequireAdministrator,
-        [string]$LanguageFile,
-        [switch]$PauseOnExit
+        [string]$LanguageFile
     )
 
     # IMPORTANT: read the direct caller's PSBoundParameters at scope 1, not inside a helper.
@@ -326,8 +365,7 @@ foreach (`$key in `$raw.Keys) { `$arguments[[string]`$key] = `$raw[`$key] }
     # The actual worker owns both clocks. UAC waiting is not included in duration.
     $startedAt = Get-Date
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $pause = [bool]([Environment]::UserInteractive -and
-        ($PauseOnExit -or ($inheritedElevation -eq '1') -or (Test-PSWinKitStandalone)))
+    $pause = [bool](Test-PSWinKitPauseRequired)
     $utility = [pscustomobject]@{
         StartedAt      = $startedAt
         Stopwatch      = $watch

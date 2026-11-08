@@ -73,8 +73,17 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
             }
             $local = Join-Path $env:windir 'System32\Recovery\Winre.wim'
             if ([IO.File]::Exists($local)) {
-                $path = $local
-                $out.Source = $m.CS26SourceLocal
+                try {
+                    Assert-CSWim $local
+                    $path = $local
+                } catch {
+                    if ($null -ne $activeRecovery -or $reInfo.Enabled -or
+                        @($parts | Where-Object { Test-RecoveryPartition $_ ([string]$disk.PartitionStyle) }).Count -gt 0) {
+                        throw
+                    }
+                    Write-Host $m.CSIsoLocalInvalid -ForegroundColor Yellow
+                }
+                if ($path) { $out.Source = $m.CS26SourceLocal }
                 # No measured source-volume usage is applicable for a newly
                 # created Recovery: use the from-scratch policy instead.
                 $out.Existing = $null
@@ -82,6 +91,15 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
                 $out.FreeBytes = $null
                 $out.MinRecoveryBytes = $null
             }
+        }
+        if ($null -eq $path -and -not $reInfo.Enabled -and
+            [string]$disk.PartitionStyle -eq 'GPT' -and
+            $null -eq $activeRecovery -and
+            @($parts | Where-Object { Test-RecoveryPartition $_ ([string]$disk.PartitionStyle) }).Count -eq 0) {
+            # Only the missing-Recovery path may use an ISO source. Obtain and
+            # validate the image BEFORE building any destructive disk plan.
+            $path = Get-CSISOImage
+            if ($path) { $out.Source = $m.CSIsoImageSource }
         }
         if ($null -eq $path) {
             $out.Error = $m.CS26ImageMissing
@@ -122,11 +140,14 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
     }
 }
 
-function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newCSize, $bounds) {
+function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newCSize, $bounds,
+    [int64]$maxNewSize = 0) {
     if ($null -ne $activeRecovery) {
         return Get-RebuildPreview $disk $c $parts $activeRecovery $newCSize
     }
-    # READ-ONLY new-Recovery layout proposal: the executor does not support it.
+    # A missing Recovery may require shrinking C: even when there is no gap.
+    # Never enlarge C: into the following partition in the create-new workflow.
+    if ($newCSize -gt [int64]$c.Size) { return $null }
     $cEnd = [int64]$c.Offset + $newCSize
     $next = @($parts | Where-Object {
         [int]$_.PartitionNumber -ne [int]$c.PartitionNumber -and
@@ -136,11 +157,16 @@ function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newC
                 elseif ($null -ne $bounds) { [int64]$bounds.End }
                 else { return $null }
     $start = Align-UpMiB $cEnd
-    if ($rightEnd -le $start) { return $null }
+    # Even an empty gap is useful to planning: C: can be shrunk to create one.
+    $available = [int64][math]::Max(0, ($rightEnd - $start))
+    $newSize = $available
+    if ($maxNewSize -gt 0) {
+        $newSize = [int64][math]::Min($available, (Align-DownMiB $maxNewSize))
+    }
     return [pscustomobject]@{
         OldNumber = 0; OldSize = [int64]0; NewStart = [int64]$start
-        NewSize = [int64]($rightEnd - $start)
-        AbsorbedGapBytes = [int64]0; IsGeometryPossible = $true
+        NewSize = [int64]$newSize; RightEnd = [int64]$rightEnd
+        AbsorbedGapBytes = [int64]0; IsGeometryPossible = [bool]($newSize -gt 0)
         CreatesMissing = $true
     }
 }
@@ -161,13 +187,25 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         return $null
     }
     if ([string]$disk.PartitionStyle -ne 'GPT') { return $null }
+    # Do not create a second Recovery if an unregistered/other Recovery exists.
+    if ($null -eq $activeRecovery) {
+        if ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber -or
+            @($parts | Where-Object { Test-RecoveryPartition $_ 'GPT' }).Count -gt 0) {
+            return $null
+        }
+    }
     $originalCSize = [int64]$c.Size
     $minRecovery = [int64]$assessment.MinRecoveryBytes
     $fsBytes = [int64]$volume.Size
     $fsDelta = [int64][math]::Max(0, $originalCSize - $fsBytes)
-    $originalGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $originalCSize $bounds
+    # For a new Recovery, cap its size instead of filling all free space.
+    # The existing-Recovery code ignores this extra argument entirely.
+    $maxNewSize = [int64]($minRecovery + 512MB)
+    $originalGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $originalCSize $bounds $maxNewSize
     if ($null -eq $originalGeo) { return $null }
-    $rightEnd = [int64]$originalGeo.NewStart + [int64]$originalGeo.NewSize
+    $rightEnd = if ($null -eq $activeRecovery) {
+        [int64]$originalGeo.RightEnd
+    } else { [int64]$originalGeo.NewStart + [int64]$originalGeo.NewSize }
 
     # First decide if Windows RE needs repair or more space (independent of C:
     # aesthetics). When recovery is healthy, preserve C: unless beauty is cheap.
@@ -176,11 +214,16 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
          [int64]$assessment.FreeBytes -lt $script:CSFreeReserve))
     $baseC = $originalCSize
     if ($mustRepair -and [int64]$originalGeo.NewSize -lt $minRecovery) {
-        $maxEnd = Align-DownMiB ([int64]($rightEnd - $minRecovery))
+        # A newly created Recovery gets 512 MiB growth allowance when shrink
+        # is needed, plus a small 16 MiB alignment/formatting margin.
+        $reserve = if ($null -eq $activeRecovery) { [int64]$script:CSFormatVariation } else { [int64]0 }
+        $targetRe = if ($null -eq $activeRecovery) { $maxNewSize } else { $minRecovery }
+        $maxEnd = Align-DownMiB ([int64]($rightEnd - $targetRe - $reserve))
         $baseC = [int64]($maxEnd - [int64]$c.Offset)
+        if ($null -eq $activeRecovery -and $baseC -gt $originalCSize) { $baseC = $originalCSize }
         if ($baseC -le 0) { return $null }
     }
-    $baseGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $baseC $bounds
+    $baseGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $baseC $bounds $maxNewSize
     if ($null -eq $baseGeo -or [int64]$baseGeo.NewSize -lt $minRecovery) { return $null }
 
     $chosenC = $baseC
@@ -192,7 +235,8 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $lower = [int64]([math]::Floor($fsBytes / $step) * 10)
     $upper = [int64]($lower + 10)
     foreach ($number in @($lower, $upper)) {
-        if ($number -le 0) { continue }
+        # Cosmetic resizes are not part of creating a missing Recovery.
+        if ($null -eq $activeRecovery -or $number -le 0) { continue }
         $goalFS = [int64]($number * $script:GiB)
         $desiredEnd = Align-UpMiB ([int64]($c.Offset + $goalFS + $fsDelta))
         $size = [int64]($desiredEnd - [int64]$c.Offset)
@@ -200,7 +244,7 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         if (-not $mustRepair -and
             [int64][math]::Floor($fsBytes / [double]$script:GiB) -eq $number) { continue }
         if ([math]::Abs([double]($size - $baseC)) -gt $script:CSCosmeticLimit) { continue }
-        $candidateGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $size $bounds
+        $candidateGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $size $bounds $maxNewSize
         if ($null -eq $candidateGeo -or [int64]$candidateGeo.NewSize -lt $minRecovery) { continue }
         # Avoid changing a system volume for beauty if the target filesystem
         # is only nominally smaller but Windows can't fit its actual metadata.
@@ -213,7 +257,7 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         }
     }
     if (-not $mustRepair -and -not $beauty) { return $null }
-    $geo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $chosenC $bounds
+    $geo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $chosenC $bounds $maxNewSize
     if ($null -eq $geo -or [int64]$geo.NewSize -lt $minRecovery) { return $null }
     $targetExplorer = [int64][math]::Floor(
         ([double]($fsBytes + $chosenC - $originalCSize)) / $script:GiB)
