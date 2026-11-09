@@ -616,9 +616,28 @@ function Assert-CSAfterCResize($disk, $c, $oldRecovery, $targetBytes, $snapshot)
     }
 }
 
-# Run online NTFS check ONLY after the final partition-change confirmation.
-# If corruption is detected, offer an independent approval for a boot-time fix,
-# do not touch the partition table, and always exit the current execution path.
+# Read-only check for a boot-time C: filesystem repair scheduled via chkdsk or
+# Repair-Volume. This is deliberately called ONLY after final confirmation,
+# never while constructing or reviewing the proposed partition plan.
+function Test-CSPendingBootCheckC {
+    $bootExecute = @((Get-ItemProperty -LiteralPath `
+        'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' `
+        -ErrorAction Stop).BootExecute)
+    foreach ($entry in $bootExecute) {
+        $line = [string]$entry
+        # Ignore the default 'autocheck autochk /q /v *' entry, but stop for
+        # any explicit C: entry (as observed after Repair-Volume on Server 2019).
+        if ($line -match '(?i)\bautochk\b' -and $line -match '(?i)C:') {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Scan C: only AFTER the user confirms the complete disk-change plan, but
+# BEFORE disabling WinRE, resizing any partition, or creating Recovery.
+# When NTFS requires attention, disk changes are cancelled. Scheduling an
+# offline fix requires a second, explicit approval and never restarts Windows.
 function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
     Write-Host ''
     Write-Host $m.CSFsScanStart -ForegroundColor Cyan
@@ -631,8 +650,13 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
     $vol = Get-Volume -DriveLetter C -ErrorAction Stop
     if ([string]$vol.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
 
-    # Repair-Volume -Scan does not run offline repairs or dismount C:.
-    # Treat all unknown/no-output/error conditions as NOT proven healthy.
+    # An existing CHKDSK request takes priority over any partition operation.
+    # Do NOT inspect BootExecute during planning or before final confirmation.
+    if (Test-CSPendingBootCheckC) {
+        Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
+        return $false
+    }
+
     $scanProblem = $null
     $scanStatus = ''
     try {
@@ -645,37 +669,78 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
     } catch {
         $scanProblem = $m.CSFsScanFailure -f $_.Exception.Message
     }
+
+    # For example, StorageWMI 43012 is a VSS/snapshot failure, not proof of
+    # NTFS corruption. Retry read-only via chkdsk /scan and trust ONLY exit 0.
+    if ($scanProblem) {
+        Write-Host $scanProblem -ForegroundColor Yellow
+        Write-Host $m.CSFsChkdskFallback -ForegroundColor Cyan
+        try {
+            $fallbackOutput = @(& chkdsk.exe C: /scan 2>&1)
+            $fallbackCode = $LASTEXITCODE
+            if ($fallbackCode -eq 0) {
+                $scanProblem = $null
+                $scanStatus = 'NoErrorsFound'
+                Write-Host $m.CSFsChkdskClean -ForegroundColor Green
+            } else {
+                $detail = (@($fallbackOutput | Select-Object -Last 4) -join ' ').Trim()
+                Write-Host ($m.CSFsChkdskFailed -f $fallbackCode, $detail) -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host ($m.CSFsChkdskFailed -f 'exception', $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+
     $after = Get-Volume -DriveLetter C -ErrorAction Stop
     if ([string]$after.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
     Assert-CSLayoutUnchanged $disk $snapshot
+    if (Test-CSPendingBootCheckC) {
+        Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
+        return $false
+    }
     if (-not $scanProblem -and $scanStatus -in @('NoErrorsFound','0') -and
         [string]$after.HealthStatus -in @('Healthy','0')) {
         Write-Host $m.CSFsScanClean -ForegroundColor Green
         return $true
     }
-    if ($scanProblem) {
-        Write-Host $scanProblem -ForegroundColor Yellow
-    } else {
+
+    if (-not $scanProblem) {
         Write-Host ($m.CSFsScanNeedsRepair -f $scanStatus, ([string]$after.HealthStatus)) -ForegroundColor Yellow
     }
     Write-Host $m.CSFsScanExecutionStopped -ForegroundColor Yellow
-    if (-not (Read-YesNo $m.CSFsScheduleQuestion)) {
+
+    # Only a known SpotFix-needed result qualifies for the targeted repair.
+    # Unknown scan failures and other unhealthy statuses need an offline scan.
+    $spotFixNeeded = ($scanStatus -in @('SpotFixNeeded','2') -or
+        [string]$after.HealthStatus -in @('SpotFixNeeded','2')) -and
+        -not ($scanStatus -in @('FullRepairNeeded','3') -or
+        [string]$after.HealthStatus -in @('FullRepairNeeded','3'))
+    if ($scanProblem) { $spotFixNeeded = $false }
+    $mode = if ($spotFixNeeded) { 'SpotFix' } else { 'OfflineScanAndFix' }
+    if (-not (Read-YesNo ($m.CSFsScheduleQuestion -f $mode))) {
         Write-Host $m.CSFsScheduleDeclined -ForegroundColor Yellow
         return $false
     }
-    # Scheduling is separately approved; it is NOT authorized by the earlier
-    # consent to change partition geometry. No reboot is triggered.
-    # chkntfs /c schedules checks on startup for dirty volumes, hence mark C:
-    # dirty explicitly after the scan. Check native process exit codes.
-    Write-Host $m.CSFsScheduling -ForegroundColor Cyan
-    $out = @(& fsutil.exe dirty set C: 2>&1)
-    $code = $LASTEXITCODE
-    if ($code -ne 0) { throw ($m.CSFsScheduleFailed -f ('fsutil dirty set C:'), $code, ($out -join ' ')) }
-    $out = @(& chkntfs.exe /c C: 2>&1)
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
-        Write-Host $m.CSFsDirtyMarked -ForegroundColor Yellow
-        throw ($m.CSFsScheduleFailed -f ('chkntfs /c C:'), $code, ($out -join ' '))
+
+    # Experiments on Server 2019 confirmed that both Repair-Volume modes
+    # schedule autocheck on the boot/system volume, even with NoErrorsFound.
+    # No fsutil dirty set and no chkntfs /c: do not forge a dirty NTFS bit.
+    Write-Host ($m.CSFsScheduling -f $mode) -ForegroundColor Cyan
+    try {
+        if ($spotFixNeeded) {
+            $repairResult = @(Repair-Volume -DriveLetter C -SpotFix -Confirm:$false -ErrorAction Stop)
+        } else {
+            $repairResult = @(Repair-Volume -DriveLetter C -OfflineScanAndFix `
+                -Confirm:$false -ErrorAction Stop)
+        }
+    } catch {
+        throw ($m.CSFsRepairCommandFailed -f $mode, $_.Exception.Message)
+    }
+    $repairText = ($repairResult -join ', ')
+    Write-Host ($m.CSFsRepairResult -f $mode, $repairText)
+    if (-not (Test-CSPendingBootCheckC)) {
+        Write-Host $m.CSFsScheduleNotVerified -ForegroundColor Yellow
+        return $false
     }
     Write-Host $m.CSFsScheduledReboot -ForegroundColor Yellow
     return $false
