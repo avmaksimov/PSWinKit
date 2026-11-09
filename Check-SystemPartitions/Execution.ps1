@@ -206,16 +206,87 @@ function Show-CSShrinkLimit($disk, $c, [int64]$target) {
         return $false
     }
 }
-function Show-CSShrinkAdvice([bool]$TargetWithinReportedRange = $false) {
+# Report relevant Windows events after a failed C: shrink.
+# This is diagnostic only; event messages are not used to make disk decisions.
+function Show-CSShrinkEvents([datetime]$startedAt) {
+    # The volume-size check just before shrinking may also emit event 259.
+    $start = $startedAt.AddMinutes(-2)
+    $found = $false
+    $readFailure = $false
+
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Id = @(257, 259)
+            StartTime = $start
+        } -MaxEvents 80 -ErrorAction Stop | Where-Object {
+            $_.ProviderName -match 'Defrag' -and [string]$_.Message -match 'C:'
+        })
+        $seenIds = @{}
+        foreach ($entry in $events) {
+            # Event 257 is the operation error; 259 names a possible blocker.
+            # The newest event of each type is enough to avoid log flooding.
+            if ($seenIds.ContainsKey([int]$entry.Id)) { continue }
+            $seenIds[[int]$entry.Id] = $true
+            if (-not $found) {
+                Write-Host $m.CSShrinkEventsTitle -ForegroundColor Yellow
+                $found = $true
+            }
+            Write-Host ($m.CSShrinkEventLine -f $entry.TimeCreated,
+                $entry.ProviderName, $entry.Id) -ForegroundColor DarkGray
+            if (-not [string]::IsNullOrWhiteSpace([string]$entry.Message)) {
+                Write-Host ('    ' + ([string]$entry.Message).Trim().Replace("`r", '').Replace("`n", "`n    "))
+            }
+            if ($seenIds.Count -ge 2) { break }
+        }
+    } catch {
+        if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') {
+            $readFailure = $true
+            Write-Host ($m.CSShrinkEventsReadError -f 'Application', $_.Exception.Message) -ForegroundColor DarkGray
+        }
+    }
+
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{
+            LogName = 'System'
+            Level = @(1, 2, 3)
+            StartTime = $startedAt
+        } -MaxEvents 100 -ErrorAction Stop | Where-Object {
+            $_.ProviderName -match '^(Microsoft-Windows-)?(Disk|Ntfs|volmgr|partmgr|storport|storahci|stornvme|volsnap|Storage-ClassPnP)$'
+        } | Select-Object -First 2)
+        if ($events.Count -gt 0) {
+            if (-not $found) {
+                Write-Host $m.CSShrinkEventsTitle -ForegroundColor Yellow
+                $found = $true
+            }
+            Write-Host $m.CSShrinkSystemEventsNote -ForegroundColor DarkGray
+            foreach ($entry in $events) {
+                Write-Host ($m.CSShrinkEventLine -f $entry.TimeCreated,
+                    $entry.ProviderName, $entry.Id) -ForegroundColor DarkGray
+                if (-not [string]::IsNullOrWhiteSpace([string]$entry.Message)) {
+                    Write-Host ('    ' + ([string]$entry.Message).Trim().Replace("`r", '').Replace("`n", "`n    "))
+                }
+            }
+        }
+    } catch {
+        if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') {
+            $readFailure = $true
+            Write-Host ($m.CSShrinkEventsReadError -f 'System', $_.Exception.Message) -ForegroundColor DarkGray
+        }
+    }
+    if (-not $found -and -not $readFailure) { Write-Host $m.CSShrinkEventsNone -ForegroundColor DarkGray }
+}
+
+function Show-CSShrinkAdvice([bool]$TargetWithinReportedRange = $false, [switch]$EventsInspected) {
     if ($TargetWithinReportedRange) {
         # An in-range target rejected by Windows is not evidence of an
         # immovable file. Do not suggest changing pagefile/hibernation yet.
         Write-Host $m.CSShrinkInRangeRejected -ForegroundColor Yellow
-        Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow
+        if (-not $EventsInspected) { Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow }
         return
     }
     Write-Host $m.CSShrinkAdviceFiles -ForegroundColor Yellow
-    Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow
+    if (-not $EventsInspected) { Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow }
     Write-Host $m.CSShrinkAdviceRestart -ForegroundColor Yellow
 }
 
@@ -745,13 +816,15 @@ function Invoke-CSCRecoveryExecution {
                 Show-CSShrinkAdvice $reportedRange
                 throw $m.CSExecShrinkBlocked
             }
+            $shrinkStartedAt = Get-Date
             try {
                 Invoke-CSResizeWithDiskPartFallback $Disk $C $snapshot $ActiveRecovery `
                     ([int64]$Proposal.TargetPartitionBytes)
             } catch {
                 $failure = $_
+                Show-CSShrinkEvents $shrinkStartedAt
                 $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice $reportedRange
+                Show-CSShrinkAdvice $reportedRange -EventsInspected
                 throw $failure
             }
             Assert-CSAfterShrink $Disk $C $ActiveRecovery $Proposal.TargetPartitionBytes $snapshot
@@ -1070,6 +1143,7 @@ function Invoke-CSCreateMissingRecovery {
         if ([int64]$Proposal.ChangeBytes -lt 0) {
             Write-Host $m.CSExecShrinkC
             $script:CSExecMutated = $true
+            $shrinkStartedAt = Get-Date
             try {
                 Invoke-CSResizeWithDiskPartFallback $Disk $C $snapshot $null `
                     ([int64]$Proposal.TargetPartitionBytes)
@@ -1089,8 +1163,9 @@ function Invoke-CSCreateMissingRecovery {
                 } catch {
                     # Preserve staging and require manual verification if unsure.
                 }
+                Show-CSShrinkEvents $shrinkStartedAt
                 $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice $reportedRange
+                Show-CSShrinkAdvice $reportedRange -EventsInspected
                 throw $failure
             }
             Assert-CSAfterShrink $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
