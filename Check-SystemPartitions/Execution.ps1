@@ -1302,3 +1302,147 @@ function Invoke-CSCreateMissingRecovery {
         }
     }
 }
+
+# Grow a healthy, registered NTFS Recovery ONLY into its immediately adjacent
+# unallocated space. Never change its GPT type, move or recreate partitions.
+function Invoke-CSExtendRecovery {
+    param($Disk, $C, $Parts, $ActiveRecovery, $ReInfo, $Extension)
+    $script:CSExecLastSucceeded = $false
+    $script:CSExecMutated = $false
+    $snapshot = @($Parts | Sort-Object Offset | ForEach-Object {
+        [pscustomobject]@{
+            PartitionNumber = [int]$_.PartitionNumber
+            Offset = [int64]$_.Offset
+            Size = [int64]$_.Size
+            GptType = [string]$_.GptType
+            Guid = [string]$_.Guid
+        }
+    })
+    $partNumber = [int]$ActiveRecovery.PartitionNumber
+    $target = [int64]$Extension.NewSize
+    $oldSize = [int64]$ActiveRecovery.Size
+    $completed = $false
+    try {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSExecPreflightTitle + ' ===') -ForegroundColor Cyan
+        Write-Host $m.CSExtendPreflight -ForegroundColor DarkGray
+        Assert-CSBasicDisk $Disk $Parts
+        if ([string]$Disk.PartitionStyle -ne 'GPT' -or $Disk.IsOffline -or
+            $Disk.IsReadOnly -or -not $Disk.IsBoot -or
+            ($Disk.PSObject.Properties['IsClustered'] -and $Disk.IsClustered)) {
+            throw $m.CSExecDiskUnsafe
+        }
+        if (-not $ReInfo.Enabled -or [int]$ReInfo.DiskNumber -ne [int]$Disk.Number -or
+            [int]$ReInfo.PartitionNumber -ne $partNumber -or
+            -not (Test-RecoveryPartition $ActiveRecovery 'GPT') -or
+            $ActiveRecovery.IsSystem -or $ActiveRecovery.IsBoot -or $ActiveRecovery.IsActive) {
+            throw $m.CSExecRecoveryUnknown
+        }
+        if ([int64]$Extension.NewStart -ne [int64]$ActiveRecovery.Offset -or
+            [int64]$Extension.OldSize -ne $oldSize -or
+            $target -le $oldSize -or
+            ($target - $oldSize) % $script:MiB -ne 0 -or
+            [int64]$Extension.NewStart + $target -gt [int64]$Extension.RightEnd) {
+            throw $m.CSExecLayoutUnsupported
+        }
+        $oldEnd = Get-PartitionEnd $ActiveRecovery
+        $next = @($Parts | Where-Object {
+            [int]$_.PartitionNumber -ne $partNumber -and [int64]$_.Offset -ge $oldEnd
+        } | Sort-Object Offset)
+        $bounds = Get-UsableDiskBounds $Disk $Parts
+        if ($null -eq $bounds) { throw $m.CSGptBoundsUnavailable }
+        $limit = [int64]$bounds.End
+        if ($next.Count -gt 0) { $limit = [int64][math]::Min($limit, [int64]$next[0].Offset) }
+        if ($limit -ne [int64]$Extension.RightEnd -or
+            $oldEnd -gt $limit -or
+            [int64]$Extension.NewStart + $target -gt $limit) {
+            throw $m.CSExecLayoutChanged
+        }
+        Assert-CSLayoutUnchanged $Disk $snapshot
+        $livePart = Get-Partition -DiskNumber ([int]$Disk.Number) `
+            -PartitionNumber $partNumber -ErrorAction Stop
+        if ([string]$livePart.Guid -ne [string]$ActiveRecovery.Guid -or
+            $livePart.DriveLetter) { throw $m.CSExecLayoutChanged }
+        $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+        if ([int]$liveC.DiskNumber -ne [int]$Disk.Number -or
+            [int64]$liveC.Offset -ne [int64]$C.Offset -or
+            [int64]$liveC.Size -ne [int64]$C.Size) { throw $m.CSExecLayoutChanged }
+        $reVol = Get-Volume -Partition $ActiveRecovery -ErrorAction Stop
+        if ([string]$reVol.FileSystem -ne 'NTFS' -or
+            [string]$reVol.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
+        Assert-CSPendingRebootClear
+        Assert-CSBitLockerOff
+        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
+            -PartitionNumber $partNumber -ErrorAction Stop
+        if ($null -eq $supported -or $target -gt [int64]$supported.SizeMax -or
+            $target -lt [int64]$supported.SizeMin) { throw $m.CSExtendUnsupported }
+        Write-Host ($m.CSExtendPreflightPassed -f (Format-DetailedSize ($target - $oldSize))) -ForegroundColor Green
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSExtendConfirmTitle + ' ===') -ForegroundColor Cyan
+        Write-Host ($m.CSExtendPlan -f $partNumber,
+            (Format-DetailedSize $oldSize), (Format-DetailedSize $target),
+            (Format-DetailedSize ($target - $oldSize)))
+        Write-Host $m.CSExtendPlanNotice
+        Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
+        Write-Host ''
+        if (-not (Read-YesNo $m.CSExtendConfirm)) {
+            Write-Host $m.CSExecCancelled -ForegroundColor Yellow
+            return
+        }
+        Write-Host $m.CSExecPostConfirmCheck -ForegroundColor DarkGray
+        Assert-CSLayoutUnchanged $Disk $snapshot
+        $livePart = Get-Partition -DiskNumber ([int]$Disk.Number) `
+            -PartitionNumber $partNumber -ErrorAction Stop
+        if ([string]$livePart.Guid -ne [string]$ActiveRecovery.Guid -or
+            $livePart.DriveLetter) { throw $m.CSExecLayoutChanged }
+        $liveRe = Get-WinReSnapshot
+        if (-not $liveRe.Enabled -or [int]$liveRe.DiskNumber -ne [int]$Disk.Number -or
+            [int]$liveRe.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
+        Assert-CSPendingRebootClear
+        Assert-CSBitLockerOff
+        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
+            -PartitionNumber $partNumber -ErrorAction Stop
+        if ($target -gt [int64]$supported.SizeMax -or
+            $target -lt [int64]$supported.SizeMin) { throw $m.CSExtendUnsupported }
+        Write-Host $m.CSExtendApplying -ForegroundColor Cyan
+        $script:CSExecMutated = $true
+        Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber `
+            -Size ([uint64]$target) -Confirm:$false -ErrorAction Stop
+        $after = @(Get-Partition -DiskNumber ([int]$Disk.Number) -ErrorAction Stop | Sort-Object Offset)
+        if ($after.Count -ne $snapshot.Count) { throw $m.CSExecLayoutChanged }
+        for ($i = 0; $i -lt $after.Count; $i++) {
+            $a = $after[$i]; $b = $snapshot[$i]
+            $expectedSize = if ([int]$a.PartitionNumber -eq $partNumber) { $target } else { [int64]$b.Size }
+            if ([int]$a.PartitionNumber -ne [int]$b.PartitionNumber -or
+                [int64]$a.Offset -ne [int64]$b.Offset -or
+                [int64]$a.Size -ne $expectedSize -or
+                [string]$a.GptType -ne [string]$b.GptType -or
+                [string]$a.Guid -ne [string]$b.Guid) { throw $m.CSExecLayoutChanged }
+        }
+        $freshRe = @(Get-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber -ErrorAction Stop)
+        if ($freshRe.Count -ne 1 -or -not (Test-RecoveryPartition $freshRe[0] 'GPT') -or
+            $freshRe[0].DriveLetter) { throw $m.CSExecRecoveryUnsafe }
+        $volume = Get-Volume -Partition $freshRe[0] -ErrorAction Stop
+        if ([string]$volume.FileSystem -ne 'NTFS' -or
+            [string]$volume.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
+        $registered = Get-WinReSnapshot
+        if (-not $registered.Enabled -or [int]$registered.DiskNumber -ne [int]$Disk.Number -or
+            [int]$registered.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
+        $completed = $true
+        $script:CSExecLastSucceeded = $true
+        Write-Host $m.CSExtendComplete -ForegroundColor Green
+    } catch {
+        $failure = $_
+        if (-not $completed) {
+            try {
+                Assert-CSLayoutUnchanged $Disk $snapshot
+                $script:CSExecMutated = $false
+            } catch { }
+        }
+        Write-Host ($m.CSExecError -f $failure.Exception.Message) -ForegroundColor Red
+        $script:CSExecErrorReportedMessage = $failure.Exception.Message
+        if ($script:CSExecMutated) { Write-Host $m.CSExecManualRecovery -ForegroundColor Yellow }
+        throw $failure
+    }
+}
+
