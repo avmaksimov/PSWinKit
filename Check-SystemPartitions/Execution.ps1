@@ -198,13 +198,22 @@ function Show-CSShrinkLimit($disk, $c, [int64]$target) {
         Write-Host ($m.CSShrinkAvailable -f (Format-DetailedSize $available),
             (Format-DetailedSize $needed),
             (Format-DetailedSize ([int64]$supported.SizeMin))) -ForegroundColor Yellow
+        Write-Host ($m.CSShrinkExactValues -f ([int64]$live.Size), $target,
+            ([int64]$supported.SizeMin), ([int64]$supported.SizeMax)) -ForegroundColor DarkGray
         return ($target -ge [int64]$supported.SizeMin -and $target -le [int64]$supported.SizeMax)
     } catch {
         Write-Host ($m.CSShrinkLimitUnknown -f $_.Exception.Message) -ForegroundColor Yellow
         return $false
     }
 }
-function Show-CSShrinkAdvice {
+function Show-CSShrinkAdvice([bool]$TargetWithinReportedRange = $false) {
+    if ($TargetWithinReportedRange) {
+        # An in-range target rejected by Windows is not evidence of an
+        # immovable file. Do not suggest changing pagefile/hibernation yet.
+        Write-Host $m.CSShrinkInRangeRejected -ForegroundColor Yellow
+        Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow
+        return
+    }
     Write-Host $m.CSShrinkAdviceFiles -ForegroundColor Yellow
     Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow
     Write-Host $m.CSShrinkAdviceRestart -ForegroundColor Yellow
@@ -669,8 +678,8 @@ function Invoke-CSCRecoveryExecution {
             $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
                 -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
             if ([int64]$Proposal.TargetPartitionBytes -lt [int64]$sizes.SizeMin) {
-                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice
+                $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice $reportedRange
                 throw $m.CSExecShrinkBlocked
             }
             try {
@@ -678,8 +687,8 @@ function Invoke-CSCRecoveryExecution {
                     -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
             } catch {
                 $failure = $_
-                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice
+                $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice $reportedRange
                 throw $failure
             }
             Assert-CSAfterShrink $Disk $C $ActiveRecovery $Proposal.TargetPartitionBytes $snapshot
@@ -716,8 +725,8 @@ function Invoke-CSCRecoveryExecution {
                     -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
             } catch {
                 $failure = $_
-                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice
+                $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice $reportedRange
                 throw $failure
             }
         }
@@ -1018,8 +1027,8 @@ function Invoke-CSCreateMissingRecovery {
                 } catch {
                     # Preserve staging and require manual verification if unsure.
                 }
-                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
-                Show-CSShrinkAdvice
+                $reportedRange = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice $reportedRange
                 throw $failure
             }
             Assert-CSAfterShrink $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
