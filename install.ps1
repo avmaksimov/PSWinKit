@@ -68,6 +68,7 @@ $stagedFiles = New-Object 'System.Collections.Generic.List[string]'
 $manifest = Join-Path $target 'install.psd1'
 $manifestStage = $manifest + '.new'
 $failed = $false
+$replacementStarted = $false
 $manifestStageCreated = $false
 
 # Validate paths recorded in an old state file before they are considered for removal.
@@ -78,6 +79,73 @@ function Test-RelativeFileName {
     if ($Name -match '(?:^|[\\/])\.' -or $Name -match '[\\/]$') { return $false }
     if ($Name -match '(?:^|[\\/])[^\\/]*[. ](?:[\\/]|$)') { return $false }
     return $true
+}
+
+# Read the reparse tag without following links. A deduplicated NTFS file
+# (IO_REPARSE_TAG_DEDUP) is not a symlink or junction.
+function Get-PSWinKitReparseTag {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not ('PSWinKit.NativeReparse' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+namespace PSWinKit {
+    public static class NativeReparse {
+        public const uint DedupTag = 0x80000013;
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WIN32_FIND_DATA {
+            public uint dwFileAttributes;
+            public FILETIME ftCreationTime;
+            public FILETIME ftLastAccessTime;
+            public FILETIME ftLastWriteTime;
+            public uint nFileSizeHigh;
+            public uint nFileSizeLow;
+            public uint dwReserved0;
+            public uint dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+            public string cAlternateFileName;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindFirstFileW", SetLastError = true)]
+        private static extern IntPtr FindFirstFile(string path, out WIN32_FIND_DATA data);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool FindClose(IntPtr handle);
+        public static uint GetTag(string path) {
+            WIN32_FIND_DATA data;
+            IntPtr handle = FindFirstFile(path, out data);
+            if (handle == new IntPtr(-1)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            try { return data.dwReserved0; }
+            finally { FindClose(handle); }
+        }
+    }
+}
+'@ -ErrorAction Stop
+    }
+    return [PSWinKit.NativeReparse]::GetTag($Path)
+}
+
+# Reject reparse directories and all reparse files except Windows Data Deduplication.
+# Fail closed if the tag cannot be read.
+function Assert-PSWinKitSafeFilePathComponent {
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$ErrorMessage)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { return }
+    if ($item.PSIsContainer) { throw ($ErrorMessage -f $Path) }
+    try {
+        $tag = Get-PSWinKitReparseTag -Path $Path
+    }
+    catch {
+        throw ('{0} (reparse tag read failed: {1})' -f ($ErrorMessage -f $Path), $_.Exception.Message)
+    }
+    if ($tag -ne [PSWinKit.NativeReparse]::DedupTag) {
+        throw ('{0} (reparse tag 0x{1:X8})' -f ($ErrorMessage -f $Path), [uint32]$tag)
+    }
 }
 
 function Get-TargetFile {
@@ -94,16 +162,17 @@ function Get-TargetFile {
     foreach ($part in ($relative -split '\\')) {
         $current = Join-Path $current $part
         if (Test-Path -LiteralPath $current) {
-            $attributes = (Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes
-            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw ($m.LinkPath -f $current)
-            }
+            Assert-PSWinKitSafeFilePathComponent -Path $current -ErrorMessage $m.LinkPath
         }
     }
     return $destination
 }
 
 try {
+    $targetRoot = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+    if (($targetRoot.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw ($m.LinkPath -f $target)
+    }
     $sourceRoot = $PSScriptRoot.TrimEnd('\')
     # Find all repository files, including nested folders; omit dot-prefixed
     # items, this installer and the locally generated install.psd1.
@@ -122,7 +191,7 @@ try {
     $newNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($sourceFile in $sourceFiles) {
         if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw ($m.SourceLink -f $sourceFile.FullName)
+            Assert-PSWinKitSafeFilePathComponent -Path $sourceFile.FullName -ErrorMessage $m.SourceLink
         }
         $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
         if (-not (Test-RelativeFileName -Name $name)) { throw ($m.InvalidPath -f $name) }
@@ -274,11 +343,13 @@ try {
         foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +
                          @($changes | Where-Object { $_.Name -ieq 'update.ps1' })) {
             $staged = $item.Target + '.new'
+            $replacementStarted = $true
             Move-Item -LiteralPath $staged -Destination $item.Target -Force -ErrorAction Stop
             $verb = if ($item.State -eq 'INSTALL') { $m.Installed } else { $m.Replaced }
             Write-Host ("${verb}: $($item.Name)") -ForegroundColor Green
         }
         foreach ($item in $removals) {
+            $replacementStarted = $true
             Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
             Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
         }
@@ -301,6 +372,7 @@ try {
     if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
     $manifestStageCreated = $true
     [IO.File]::WriteAllText($manifestStage, (($stateLines -join "`r`n") + "`r`n"), ([Text.UTF8Encoding]::new($true)))
+    $replacementStarted = $true
     Move-Item -LiteralPath $manifestStage -Destination $manifest -Force -ErrorAction Stop
     Write-Host ''
     if ($metadataOnly) {
@@ -314,7 +386,7 @@ catch {
     $failed = $true
     Write-Host ''
     Write-Host ($m.UpdateError -f $_.Exception.Message) -ForegroundColor Red
-    Write-Host $m.PartialWarning -ForegroundColor Yellow
+    if ($replacementStarted) { Write-Host $m.PartialWarning -ForegroundColor Yellow }
 }
 finally {
     foreach ($path in $stagedFiles) {
