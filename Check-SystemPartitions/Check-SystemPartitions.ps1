@@ -643,7 +643,12 @@ try {
     Write-Host ''
     Write-Host $m.CS27ReadOnlyUntilConfirm -ForegroundColor Yellow
     if ($null -eq $vol) { Write-Host $m.CSPlanNoCapacity -ForegroundColor Yellow }
-    if ($reInfo.Enabled -and $null -eq $activeRecovery) { Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow }
+    # WinRE registered on C: is known; it is not a missing/unknown WinRE.
+    # The supported MBR migration intentionally has no separate Recovery yet.
+    if ($reInfo.Enabled -and $null -eq $activeRecovery -and
+        -not ($null -ne $proposal -and $proposal.MigratingWinREOnC)) {
+        Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow
+    }
 
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false

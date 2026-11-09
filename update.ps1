@@ -87,8 +87,7 @@ try {
     }
 
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    Write-Host ($m.Source -f $url)
-    Write-Host $m.Downloading
+    Write-Host ($m.Downloading -f $url)
     $downloadUrl = $url + '?cacheBust=' + [guid]::NewGuid().ToString('N')
     Invoke-WebRequest -Uri $downloadUrl -Headers $noCacheHeaders -OutFile $zip -UseBasicParsing -ErrorAction Stop
     if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw $m.ZipMissing }
