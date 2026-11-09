@@ -342,7 +342,7 @@ function Get-CRoundProposal($c, $volume) {
     if ($null -eq $volume -or [int64]$volume.Size -le 0) { return $null }
     $fsBytes = [int64]$volume.Size
     $partBytes = [int64]$c.Size
-    $deltaBytes = [int64]([math]::Max(0, ($partBytes - $fsBytes)))
+    $deltaBytes = [int64]([math]::Max([int64]0, ($partBytes - $fsBytes)))
     $nearestGiB = [int64][math]::Floor(($fsBytes / [double]$script:GiB) + 0.5)
     if ($nearestGiB -lt 1) { return $null }
     $desiredFS = [int64]($nearestGiB * $script:GiB)
@@ -680,7 +680,7 @@ try {
                     # Only the surplus beyond the planned Recovery size can
                     # be assigned to C:. Leave C: unchanged by default.
                     $reSize = [int64]$proposal.Geometry.NewSize
-                    $maxGrowBytes = [int64][math]::Max(0,
+                    $maxGrowBytes = [int64][math]::Max([int64]0,
                         (Align-DownMiB ([int64]$proposal.Geometry.RightEnd - $reSize)) -
                         ([int64]$c.Offset + [int64]$proposal.TargetPartitionBytes))
                     $maxGrowMiB = [int64][math]::Floor($maxGrowBytes / [double]$script:MiB)
@@ -786,7 +786,7 @@ try {
             Write-Host ($m.CSCheckingShrinkSize -f (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
             try {
                 $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
-                $possibleShrink = [int64][math]::Max(0, ([int64]$c.Size - [int64]$supported.SizeMin))
+                $possibleShrink = [int64][math]::Max([int64]0, ([int64]$c.Size - [int64]$supported.SizeMin))
                 $neededShrink = [int64][math]::Abs($proposal.ChangeBytes)
                 Write-Host ($m.CSShrinkAvailable -f (Format-DetailedSize $possibleShrink),
                     (Format-DetailedSize $neededShrink),

@@ -218,8 +218,8 @@ function Show-CSShrinkLimit($disk, $c, [int64]$target) {
         $live = Get-Partition -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
         $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
             -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
-        $available = [int64][math]::Max(0, ([int64]$live.Size - [int64]$supported.SizeMin))
-        $needed = [int64][math]::Max(0, ([int64]$live.Size - $target))
+        $available = [int64][math]::Max([int64]0, ([int64]$live.Size - [int64]$supported.SizeMin))
+        $needed = [int64][math]::Max([int64]0, ([int64]$live.Size - $target))
         Write-Host ($m.CSShrinkAvailable -f (Format-DetailedSize $available),
             (Format-DetailedSize $needed),
             (Format-DetailedSize ([int64]$supported.SizeMin))) -ForegroundColor Yellow

@@ -55,7 +55,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
                             # partition geometry, not an arbitrary 64 MiB allowance.
                             $out.MinRecoveryBytes = Align-UpMiB ([int64](
                                 $out.UsedBytes + $script:CSFreeReserve +
-                                [math]::Max(0, [int64]$candidate.Size - [int64]$volume.Size) +
+                                [math]::Max([int64]0, [int64]$candidate.Size - [int64]$volume.Size) +
                                 $script:MiB + $script:CSFormatVariation))
                         }
                     } catch { }
@@ -187,7 +187,7 @@ function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newC
                 else { return $null }
     $start = Align-UpMiB $cEnd
     # Even an empty gap is useful to planning: C: can be shrunk to create one.
-    $available = [int64][math]::Max(0, ($rightEnd - $start))
+    $available = [int64][math]::Max([int64]0, ($rightEnd - $start))
     $newSize = $available
     if ($maxNewSize -gt 0) {
         $newSize = [int64][math]::Min($available, (Align-DownMiB $maxNewSize))
@@ -232,7 +232,7 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $originalCSize = [int64]$c.Size
     $minRecovery = [int64]$assessment.MinRecoveryBytes
     $fsBytes = [int64]$volume.Size
-    $fsDelta = [int64][math]::Max(0, $originalCSize - $fsBytes)
+    $fsDelta = [int64][math]::Max([int64]0, $originalCSize - $fsBytes)
     # The measured minimum already includes NTFS formatting overhead.
     # Allocate 512 MiB of future growth inside Recovery, but do not shrink
     # C: for an additional 16 MiB that would only duplicate the allowance.
@@ -256,7 +256,7 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
             # allocation choice to the user after they select creating Recovery.
             # Only shrink C: when the adjacent space is too small even for
             # the calculated Recovery minimum.
-            $existingGap = [int64][math]::Max(0,
+            $existingGap = [int64][math]::Max([int64]0,
                 $rightEnd - (Align-UpMiB (Get-PartitionEnd $c)))
             if ($existingGap -lt $minRecovery) {
                 $targetEnd = Align-DownMiB ([int64]($rightEnd - $maxNewSize))
