@@ -12,6 +12,7 @@ $script:CSExecMountPart = $null
 $script:CSExecMountAttached = $false
 $script:CSExecCurrentVolumeSize = $null
 $script:CSExecCurrentVolumeFree = $null
+$script:CSBitLockerNoticePrinted = $false
 
 # Stage directories can remain after a crash or a failed destructive operation.
 # Never delete an arbitrary path or a directory containing reparse points.
@@ -156,7 +157,10 @@ function Assert-CSBitLockerOff {
                     $features = @(Get-WindowsFeature -Name 'BitLocker' -ErrorAction Stop)
                     if ($features.Count -eq 1 -and
                         [string]$features[0].InstallState -in @('Available', 'Removed')) {
-                        Write-Host $m.CSBitLockerFeatureNotInstalled -ForegroundColor Yellow
+                        if (-not $script:CSBitLockerNoticePrinted) {
+                            Write-Host $m.CSBitLockerFeatureNotInstalled -ForegroundColor DarkGray
+                            $script:CSBitLockerNoticePrinted = $true
+                        }
                         return
                     }
                 }
@@ -167,6 +171,74 @@ function Assert-CSBitLockerOff {
         throw ($m.CSExecBitLockerUnknown + ' ' +
             ($m.CSBitLockerCheckDetails -f $moduleFailure, $wmiError.Exception.Message))
     }
+}
+
+# Storage's Get-Disk normally excludes dynamic disks. Reject LDM partition
+# types explicitly as well, so an unsupported layout cannot be modified.
+function Assert-CSBasicDisk($disk, $parts) {
+    if ([string]$disk.PartitionStyle -notin @('GPT', 'MBR')) { throw $m.CSExecBasicDisksOnly }
+    foreach ($part in $parts) {
+        $gpt = (Get-GptId $part)
+        if ($gpt -in @('AF9B60A0-1431-4F62-BC68-3311714A69AD',
+            '5808C8AA-7E8F-42E0-85D2-E1E90434CFB3') -or
+            [string]$part.MbrType -in @('66', '0x42')) {
+            throw $m.CSExecBasicDisksOnly
+        }
+    }
+}
+
+# Read-only diagnostic used whenever Windows refuses the planned shrink.
+function Show-CSShrinkLimit($disk, $c, [int64]$target) {
+    try {
+        $live = Get-Partition -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
+        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
+        $available = [int64][math]::Max(0, ([int64]$live.Size - [int64]$supported.SizeMin))
+        $needed = [int64][math]::Max(0, ([int64]$live.Size - $target))
+        Write-Host ($m.CSShrinkAvailable -f (Format-DetailedSize $available),
+            (Format-DetailedSize $needed),
+            (Format-DetailedSize ([int64]$supported.SizeMin))) -ForegroundColor Yellow
+        return ($target -ge [int64]$supported.SizeMin -and $target -le [int64]$supported.SizeMax)
+    } catch {
+        Write-Host ($m.CSShrinkLimitUnknown -f $_.Exception.Message) -ForegroundColor Yellow
+        return $false
+    }
+}
+function Show-CSShrinkAdvice {
+    Write-Host $m.CSShrinkAdviceFiles -ForegroundColor Yellow
+    Write-Host $m.CSShrinkAdviceEvent -ForegroundColor Yellow
+    Write-Host $m.CSShrinkAdviceRestart -ForegroundColor Yellow
+}
+
+function Confirm-CSSelectedChanges($disk, $c, $proposal, $geometry, $recovery, $audits) {
+    $steps = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $proposal) {
+        if ([int64]$proposal.ChangeBytes -ne 0) {
+            $oldCText = Format-DetailedSize ([int64]$c.Size)
+            $newCText = Format-DetailedSize ([int64]$proposal.TargetPartitionBytes)
+            if ([int64]$proposal.ChangeBytes -lt 0) {
+                $steps.Add(($m.CSConfirmShrink -f $oldCText, $newCText))
+            } else {
+                $steps.Add(($m.CSConfirmGrow -f $oldCText, $newCText))
+            }
+        }
+        if ($null -eq $recovery) {
+            $steps.Add(($m.CSConfirmCreateRecovery -f (Format-DetailedSize ([int64]$geometry.NewSize))))
+        } else {
+            $steps.Add(($m.CSConfirmRebuildRecovery -f $recovery.PartitionNumber,
+                (Format-DetailedSize ([int64]$geometry.NewSize))))
+        }
+    }
+    if ($steps.Count -eq 0) { throw $m.CSExecNoPlan }
+    Write-Host ''
+    Write-Host ('=== ' + $m.CSFinalConfirmationTitle + ' ===') -ForegroundColor Cyan
+    for ($i = 0; $i -lt $steps.Count; $i++) {
+        Write-Host ('  {0}. {1}' -f ($i + 1), $steps[$i])
+    }
+    if (@($audits).Count -eq 0) { Write-Host $m.CSConfirmOtherPartitions }
+    else { Write-Host $m.CSConfirmOptionalSeparate -ForegroundColor Yellow }
+    Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
+    return [bool](Read-YesNo $m.CSFinalConfirmationQuestion)
 }
 
 function Assert-CSLayoutUnchanged($disk, $snapshot) {
@@ -367,6 +439,7 @@ function Save-CSWim($disk, $recovery) {
 }
 
 function Assert-CSExecutionPreflight($disk, $c, $parts, $recovery, $reInfo, $proposal, $geo) {
+    Assert-CSBasicDisk $disk $parts
     if ([string]$disk.PartitionStyle -ne 'GPT') { throw $m.CSExecGptOnly }
     if ($disk.IsOffline -or $disk.IsReadOnly -or -not $disk.IsBoot) { throw $m.CSExecDiskUnsafe }
     if ($disk.PSObject.Properties['IsClustered'] -and $disk.IsClustered) { throw $m.CSExecDiskUnsafe }
@@ -411,6 +484,8 @@ function Assert-CSExecutionPreflight($disk, $c, $parts, $recovery, $reInfo, $pro
         -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
     if ([int64]$proposal.ChangeBytes -lt 0 -and
         [int64]$proposal.TargetPartitionBytes -lt [int64]$supported.SizeMin) {
+        $null = Show-CSShrinkLimit $disk $c ([int64]$proposal.TargetPartitionBytes)
+        Show-CSShrinkAdvice
         throw $m.CSExecShrinkBlocked
     }
 }
@@ -473,7 +548,7 @@ function Invoke-CSExternal([string]$file, [string[]]$arguments) {
 }
 
 function Invoke-CSCRecoveryExecution {
-    param($Disk, $C, $Parts, $ActiveRecovery, $ReInfo, $Proposal, $RebuildGeometry, [switch]$PreflightOnly)
+    param($Disk, $C, $Parts, $ActiveRecovery, $ReInfo, $Proposal, $RebuildGeometry, $AdditionalDeletions = @(), [switch]$PreflightOnly)
     if (-not $PreflightOnly) {
         Write-Host $m.CS27ExecutionRisk -ForegroundColor Red
     }
@@ -570,12 +645,7 @@ function Invoke-CSCRecoveryExecution {
                 (Format-DetailedSize ([int64][math]::Min($targetFree,$fallbackFree)))) -ForegroundColor Yellow
             throw $m.CSExecRecoveryTooSmall
         }
-        Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
-        if (-not (Read-YesNo $m.CSExecBackupConfirmed)) {
-            Write-Host $m.CSExecCancelled -ForegroundColor Yellow
-            return
-        }
-        if (-not (Read-YesNo $m.CSExecFinalConfirm)) {
+        if (-not (Confirm-CSSelectedChanges $Disk $C $Proposal $RebuildGeometry $ActiveRecovery $AdditionalDeletions)) {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
             return
         }
@@ -598,9 +668,20 @@ function Invoke-CSCRecoveryExecution {
             Write-Host $m.CSExecShrinkC
             $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
                 -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
-            if ([int64]$Proposal.TargetPartitionBytes -lt [int64]$sizes.SizeMin) { throw $m.CSExecShrinkBlocked }
-            Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber ([int]$C.PartitionNumber) `
-                -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            if ([int64]$Proposal.TargetPartitionBytes -lt [int64]$sizes.SizeMin) {
+                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice
+                throw $m.CSExecShrinkBlocked
+            }
+            try {
+                Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber ([int]$C.PartitionNumber) `
+                    -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            } catch {
+                $failure = $_
+                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice
+                throw $failure
+            }
             Assert-CSAfterShrink $Disk $C $ActiveRecovery $Proposal.TargetPartitionBytes $snapshot
         } else {
             Assert-CSLayoutUnchanged $Disk $snapshot
@@ -630,8 +711,15 @@ function Invoke-CSCRecoveryExecution {
             $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
                 -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
             if ([int64]$Proposal.TargetPartitionBytes -gt [int64]$sizes.SizeMax) { throw $m.CSExecGrowBlocked }
-            Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber ([int]$C.PartitionNumber) `
-                -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            try {
+                Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber ([int]$C.PartitionNumber) `
+                    -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            } catch {
+                $failure = $_
+                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice
+                throw $failure
+            }
         }
         $nowC = Get-Partition -DriveLetter C -ErrorAction Stop
         if ([int64]$nowC.Offset -ne [int64]$C.Offset -or
@@ -754,6 +842,7 @@ function Invoke-CSCRecoveryExecution {
 # Missing-Recovery execution is intentionally separate from the existing
 # registered-Recovery rebuild. Existing partitions are never deleted here.
 function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal, $geo) {
+    Assert-CSBasicDisk $disk $parts
     if ([string]$disk.PartitionStyle -ne 'GPT') { throw $m.CSExecGptOnly }
     if ($disk.IsOffline -or $disk.IsReadOnly -or -not $disk.IsBoot) { throw $m.CSExecDiskUnsafe }
     if ($disk.PSObject.Properties['IsClustered'] -and $disk.IsClustered) { throw $m.CSExecDiskUnsafe }
@@ -813,7 +902,11 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
     $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
         -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
     if ($targetC -lt [int64]$sizes.SizeMin -or
-        $targetC -gt [int64]$sizes.SizeMax) { throw $m.CSExecShrinkBlocked }
+        $targetC -gt [int64]$sizes.SizeMax) {
+        $null = Show-CSShrinkLimit $disk $c $targetC
+        Show-CSShrinkAdvice
+        throw $m.CSExecShrinkBlocked
+    }
 }
 
 function Save-CSLocalWinREImage {
@@ -857,7 +950,7 @@ function Assert-CSOtherPartitionsPreserved($disk, $originalParts, $c) {
 }
 
 function Invoke-CSCreateMissingRecovery {
-    param($Disk, $C, $Parts, $ReInfo, $Proposal, $RebuildGeometry)
+    param($Disk, $C, $Parts, $ReInfo, $Proposal, $RebuildGeometry, $AdditionalDeletions = @())
     $script:CSExecMutated = $false
     $script:CSExecLastSucceeded = $false
     $script:CSExecStaging = $null
@@ -895,12 +988,7 @@ function Invoke-CSCreateMissingRecovery {
         $reSizeText = Format-DetailedSize ([int64]$RebuildGeometry.NewSize)
         $wimSizeText = Format-DetailedSize $wimBytes
         Write-Host ($m.CSNewPreflightPassed -f $reSizeText, $wimSizeText) -ForegroundColor Green
-        Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
-        if (-not (Read-YesNo $m.CSExecBackupConfirmed)) {
-            Write-Host $m.CSExecCancelled -ForegroundColor Yellow
-            return
-        }
-        if (-not (Read-YesNo $m.CSNewFinalConfirm)) {
+        if (-not (Confirm-CSSelectedChanges $Disk $C $Proposal $RebuildGeometry $null $AdditionalDeletions)) {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
             return
         }
@@ -910,9 +998,30 @@ function Invoke-CSCreateMissingRecovery {
         if ([int64]$Proposal.ChangeBytes -lt 0) {
             Write-Host $m.CSExecShrinkC
             $script:CSExecMutated = $true
-            Resize-Partition -DiskNumber ([int]$Disk.Number) `
-                -PartitionNumber ([int]$C.PartitionNumber) `
-                -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            try {
+                Resize-Partition -DiskNumber ([int]$Disk.Number) `
+                    -PartitionNumber ([int]$C.PartitionNumber) `
+                    -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            } catch {
+                $failure = $_
+                # The shrink command can fail before changing any geometry.
+                # Only clear the mutation flag after a full layout recheck.
+                try {
+                    $postC = Get-Partition -DiskNumber ([int]$Disk.Number) `
+                        -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
+                    if ([int64]$postC.Size -eq [int64]$C.Size -and
+                        [int64]$postC.Offset -eq [int64]$C.Offset) {
+                        Assert-CSLayoutUnchanged $Disk $snapshot
+                        $script:CSExecMutated = $false
+                        Write-Host $m.CSShrinkLayoutUnchanged -ForegroundColor DarkGray
+                    }
+                } catch {
+                    # Preserve staging and require manual verification if unsure.
+                }
+                $null = Show-CSShrinkLimit $Disk $C ([int64]$Proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice
+                throw $failure
+            }
             Assert-CSAfterShrink $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
         }
         $nowC = Get-Partition -DriveLetter C -ErrorAction Stop

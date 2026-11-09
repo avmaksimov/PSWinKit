@@ -466,7 +466,8 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
 function Read-YesNo([string]$prompt) {
     # Visually separate the final destructive confirmation from the backup
     # acknowledgement and other preflight output, in every language.
-    if ($prompt -eq $m.CSExecFinalConfirm -or $prompt -eq $m.CSNewFinalConfirm) {
+    if ($prompt -eq $m.CSExecFinalConfirm -or $prompt -eq $m.CSNewFinalConfirm -or
+        $prompt -eq $m.CSFinalConfirmationQuestion) {
         Write-Host ''
     }
     while ($true) {
@@ -539,6 +540,7 @@ try {
     $disk = Get-Disk -Number ([int]$c.DiskNumber) -ErrorAction Stop
     if ([string]$disk.PartitionStyle -notin @('GPT','MBR')) { throw $m.OnlyGptMbr }
     $parts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop | Sort-Object Offset)
+    Assert-CSBasicDisk $disk $parts
     $usableBounds = Get-UsableDiskBounds $disk $parts
     $reInfo = Get-WinReSnapshot
     # Offer cleanup of abandoned, old protected staging folders at EVERY launch.
@@ -718,6 +720,11 @@ try {
             Write-Host ($m.CSCheckingShrinkSize -f (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) -ForegroundColor DarkGray
             try {
                 $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
+                $possibleShrink = [int64][math]::Max(0, ([int64]$c.Size - [int64]$supported.SizeMin))
+                $neededShrink = [int64][math]::Abs($proposal.ChangeBytes)
+                Write-Host ($m.CSShrinkAvailable -f (Format-DetailedSize $possibleShrink),
+                    (Format-DetailedSize $neededShrink),
+                    (Format-DetailedSize ([int64]$supported.SizeMin))) -ForegroundColor DarkGray
                 if ($plannedCSize -lt [int64]$supported.SizeMin) {
                     Write-Host ($m.CSPlanShrinkBlocked -f (Format-PartitionSize ([int64]$supported.SizeMin))) -ForegroundColor Yellow
                     # The preview geometry remains conditional, not executable.
@@ -808,15 +815,16 @@ try {
         if ($optimiseC) {
             if ($null -eq $activeRecovery) {
                 Invoke-CSCreateMissingRecovery -Disk $disk -C $c -Parts $parts `
-                    -ReInfo $reInfo -Proposal $proposal -RebuildGeometry $rebuildGeometry
+                    -ReInfo $reInfo -Proposal $proposal -RebuildGeometry $rebuildGeometry `
+                    -AdditionalDeletions $selectedAudits
             } else {
                 Invoke-CSCRecoveryExecution -Disk $disk -C $c -Parts $parts `
                     -ActiveRecovery $activeRecovery -ReInfo $reInfo -Proposal $proposal `
-                    -RebuildGeometry $rebuildGeometry
+                    -RebuildGeometry $rebuildGeometry -AdditionalDeletions $selectedAudits
             }
             $coreSucceeded = [bool]$script:CSExecLastSucceeded
         } elseif ($selectedAudits.Count -gt 0) {
-            # Optional cleanup can be performed without rebuilding active Recovery.
+            # Optional deletions retain their separate audited confirmations.
             $coreSucceeded = $true
         } else {
             Write-Host $m.CSExecNoPlan -ForegroundColor Green
