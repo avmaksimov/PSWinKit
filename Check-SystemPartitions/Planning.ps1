@@ -145,9 +145,10 @@ function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newC
     if ($null -ne $activeRecovery) {
         return Get-RebuildPreview $disk $c $parts $activeRecovery $newCSize
     }
-    # A missing Recovery may require shrinking C: even when there is no gap.
-    # Never enlarge C: into the following partition in the create-new workflow.
-    if ($newCSize -gt [int64]$c.Size) { return $null }
+    # When creating a missing Recovery, C: may be shrunk to make room or
+    # extended into an existing adjacent gap, but may never cross its right
+    # boundary. The new Recovery is always placed directly after the new C:.
+    if ($newCSize -le 0) { return $null }
     $cEnd = [int64]$c.Offset + $newCSize
     $next = @($parts | Where-Object {
         [int]$_.PartitionNumber -ne [int]$c.PartitionNumber -and
@@ -214,15 +215,25 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         ($null -ne $assessment.FreeBytes -and
          [int64]$assessment.FreeBytes -lt $script:CSFreeReserve))
     $baseC = $originalCSize
-    if ($mustRepair -and [int64]$originalGeo.NewSize -lt $minRecovery) {
-        # The planned Recovery capacity, including NTFS overhead and the
-        # growth allowance, determines the C: shrink. Any remaining gap must
-        # come only from the actual partition alignment.
-        $targetRe = if ($null -eq $activeRecovery) { $maxNewSize } else { $minRecovery }
-        $maxEnd = Align-DownMiB ([int64]($rightEnd - $targetRe))
-        $baseC = [int64]($maxEnd - [int64]$c.Offset)
-        if ($null -eq $activeRecovery -and $baseC -gt $originalCSize) { $baseC = $originalCSize }
-        if ($baseC -le 0) { return $null }
+    if ($mustRepair) {
+        if ($null -eq $activeRecovery) {
+            # Use an existing adjacent gap first. If it already fits the
+            # planned Recovery plus the 512 MiB growth allowance, return the
+            # surplus to C:. If the gap fits only the minimum, keep C: as-is.
+            # If it is too small even for the minimum, shrink C: enough to
+            # make the desired Recovery, without adding any external margin.
+            $existingGap = [int64][math]::Max(0,
+                $rightEnd - (Align-UpMiB (Get-PartitionEnd $c)))
+            if ($existingGap -ge $maxNewSize -or $existingGap -lt $minRecovery) {
+                $targetEnd = Align-DownMiB ([int64]($rightEnd - $maxNewSize))
+                $baseC = [int64]($targetEnd - [int64]$c.Offset)
+                if ($baseC -le 0) { return $null }
+            }
+        } elseif ([int64]$originalGeo.NewSize -lt $minRecovery) {
+            $targetEnd = Align-DownMiB ([int64]($rightEnd - $minRecovery))
+            $baseC = [int64]($targetEnd - [int64]$c.Offset)
+            if ($baseC -le 0) { return $null }
+        }
     }
     $baseGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $baseC $bounds $maxNewSize
     if ($null -eq $baseGeo -or [int64]$baseGeo.NewSize -lt $minRecovery) { return $null }

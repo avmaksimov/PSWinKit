@@ -688,7 +688,8 @@ try {
         # The active Recovery is temporary removed/recreated only as part
         # of THIS combined operation, never an independent deletion choice.
         if ($null -eq $activeRecovery) {
-            Write-Host ($m.CS26PlanCreate -f (Format-DetailedSize $proposal.MinimumRecoveryBytes))
+            Write-Host ($m.CS26PlanCreate -f (Format-DetailedSize ([int64]$rebuildGeometry.NewSize)),
+                (Format-DetailedSize ([int64]$proposal.MinimumRecoveryBytes)))
             if ($proposal.ChangeBytes -ne 0) {
                 Write-Host ($m.CS26PlanCChange -f $operation, $changeLabel)
             }

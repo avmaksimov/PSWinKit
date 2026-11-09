@@ -594,7 +594,7 @@ function Assert-CSExecutionPreflight($disk, $c, $parts, $recovery, $reInfo, $pro
     }
 }
 
-function Assert-CSAfterShrink($disk, $c, $oldRecovery, $targetBytes, $snapshot) {
+function Assert-CSAfterCResize($disk, $c, $oldRecovery, $targetBytes, $snapshot) {
     $current = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop | Sort-Object Offset)
     if ($current.Count -ne $snapshot.Count) { throw $m.CSExecLayoutChanged }
     for ($i = 0; $i -lt $current.Count; $i++) {
@@ -643,7 +643,7 @@ function Invoke-CSResizeWithDiskPartFallback($disk, $c, $snapshot, $oldRecovery,
         $resizeFailure = $_
     }
     if ($null -eq $resizeFailure) {
-        Assert-CSAfterShrink $disk $c $oldRecovery $targetBytes $snapshot
+        Assert-CSAfterCResize $disk $c $oldRecovery $targetBytes $snapshot
         Write-Host $m.CSShrinkResizeSuccess -ForegroundColor Green
         return
     }
@@ -696,7 +696,7 @@ function Invoke-CSResizeWithDiskPartFallback($disk, $c, $snapshot, $oldRecovery,
     }
     # Check even if diskpart.exe failed: it might have modified the volume.
     # A missing/partial/rounded shrink must never lead to Recovery creation.
-    Assert-CSAfterShrink $disk $c $oldRecovery $targetBytes $snapshot
+    Assert-CSAfterCResize $disk $c $oldRecovery $targetBytes $snapshot
     if ($null -ne $diskPartFailure) { throw $diskPartFailure }
     Write-Host $m.CSShrinkDiskPartSuccess -ForegroundColor Green
 }
@@ -864,7 +864,7 @@ function Invoke-CSCRecoveryExecution {
                 Show-CSShrinkAdvice $reportedRange -EventsInspected
                 throw $failure
             }
-            Assert-CSAfterShrink $Disk $C $ActiveRecovery $Proposal.TargetPartitionBytes $snapshot
+            Assert-CSAfterCResize $Disk $C $ActiveRecovery $Proposal.TargetPartitionBytes $snapshot
         } else {
             Assert-CSLayoutUnchanged $Disk $snapshot
         }
@@ -1048,7 +1048,7 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
         throw $m.CSExecRecoveryTooSmall
     }
     $targetC = [int64]$proposal.TargetPartitionBytes
-    if ($targetC -le 0 -or $targetC -gt [int64]$c.Size -or
+    if ($targetC -le 0 -or
         $targetC -ne ([int64]$c.Size + [int64]$proposal.ChangeBytes)) {
         throw $m.CSExecLayoutUnsupported
     }
@@ -1083,11 +1083,15 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
     Assert-CSBitLockerOff
     $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
         -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
-    if ($targetC -lt [int64]$sizes.SizeMin -or
-        $targetC -gt [int64]$sizes.SizeMax) {
+    if ($targetC -lt [int64]$c.Size -and
+        $targetC -lt [int64]$sizes.SizeMin) {
         $null = Show-CSShrinkLimit $disk $c $targetC
         Show-CSShrinkAdvice
         throw $m.CSExecShrinkBlocked
+    }
+    if ($targetC -gt [int64]$c.Size -and
+        $targetC -gt [int64]$sizes.SizeMax) {
+        throw $m.CSExecGrowBlocked
     }
 }
 
@@ -1206,7 +1210,32 @@ function Invoke-CSCreateMissingRecovery {
                 Show-CSShrinkAdvice $reportedRange -EventsInspected
                 throw $failure
             }
-            Assert-CSAfterShrink $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
+            Assert-CSAfterCResize $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
+        } elseif ([int64]$Proposal.ChangeBytes -gt 0) {
+            Write-Host $m.CSExecGrowC
+            Assert-CSLayoutUnchanged $Disk $snapshot
+            $sizeRange = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
+                -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
+            if ([int64]$Proposal.TargetPartitionBytes -gt [int64]$sizeRange.SizeMax) {
+                throw $m.CSExecGrowBlocked
+            }
+            $script:CSExecMutated = $true
+            try {
+                Resize-Partition -DiskNumber ([int]$Disk.Number) `
+                    -PartitionNumber ([int]$C.PartitionNumber) `
+                    -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
+            } catch {
+                $failure = $_
+                # A failed Storage call can partially change the volume.
+                # Only treat the disk as unchanged after checking every partition.
+                try {
+                    Assert-CSLayoutUnchanged $Disk $snapshot
+                    $script:CSExecMutated = $false
+                    Write-Host $m.CSGrowLayoutUnchanged -ForegroundColor DarkGray
+                } catch { }
+                throw $failure
+            }
+            Assert-CSAfterCResize $Disk $C $null $Proposal.TargetPartitionBytes $snapshot
         }
         $nowC = Get-Partition -DriveLetter C -ErrorAction Stop
         if ([int]$nowC.DiskNumber -ne [int]$Disk.Number -or
