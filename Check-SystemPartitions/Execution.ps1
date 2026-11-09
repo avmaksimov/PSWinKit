@@ -57,22 +57,31 @@ function Invoke-CSOfferOldStagingCleanup([switch]$WinReEnabled) {
         Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' -and
             $_.LastWriteTime -lt (Get-Date).AddMinutes(-30) })
     if ($dirs.Count -eq 0) { return }
-    Write-Host ''
-    Write-Host $m.CS27OldStageTitle -ForegroundColor Yellow
-    foreach ($dir in $dirs) {
-        if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
-            Write-Host ($m.CS27OldStageUnsafe -f $dir.FullName) -ForegroundColor Red
-            return
+    # Display a concise table and show the common location only once.
+    $tableRows = @(
+        foreach ($dir in $dirs) {
+            if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
+                Write-Host ($m.CS27OldStageUnsafe -f $dir.FullName) -ForegroundColor Red
+                return
+            }
+            $size = Get-CSStagingTreeSize $dir.FullName
+            $row = [ordered]@{}
+            $row[[string]$m.CSOldStageColumnFolder] = $dir.Name
+            $row[[string]$m.CSOldStageColumnCreated] = $dir.CreationTime.ToString('G')
+            $row[[string]$m.CSOldStageColumnSize] = Format-PartitionSize $size
+            [pscustomobject]$row
         }
-        $size = Get-CSStagingTreeSize $dir.FullName
-        Write-Host ($m.CS27OldStageRow -f $dir.Name, $dir.CreationTime,
-            (Format-PartitionSize $size))
-    }
+    )
+    if ($tableRows.Count -ne $dirs.Count) { return }
+    Write-Host ''
+    Write-Host $m.CS27OldStageTitle -ForegroundColor Cyan
+    Write-Host ($m.CSOldStageLocation -f $base)
+    Write-Host (($tableRows | Format-Table -AutoSize | Out-String -Width 100).TrimEnd())
     if (-not $WinReEnabled) {
         Write-Host $m.CS27OldStageKeep -ForegroundColor Yellow
         return
     }
-    Write-Host $m.CS27OldStageWarning -ForegroundColor Yellow
+    Write-Host $m.CS27OldStageWarning -ForegroundColor DarkGray
     if (-not (Read-YesNo $m.CS27OldStageDeleteQuestion)) { return }
     foreach ($dir in $dirs) {
         if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
