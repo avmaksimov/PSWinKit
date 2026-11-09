@@ -1303,6 +1303,29 @@ function Invoke-CSCreateMissingRecovery {
     }
 }
 
+# A Recovery partition can be adjacent to free space but still be non-resizable
+# through the Windows Storage API. Report the actual limit, without changing
+# its GPT type, attributes or Windows RE registration.
+function Assert-CSExtensionSupportedSize($disk, [int]$partitionNumber, [int64]$target,
+    [switch]$ShowRange) {
+    try {
+        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber $partitionNumber -ErrorAction Stop
+    } catch {
+        throw ($m.CSExtendSizeQueryFailed -f $_.Exception.Message)
+    }
+    if ($null -eq $supported -or $null -eq $supported.SizeMin -or
+        $null -eq $supported.SizeMax) { throw $m.CSExtendSizeUnknown }
+    $minimum = [int64]$supported.SizeMin
+    $maximum = [int64]$supported.SizeMax
+    if ($ShowRange) {
+        Write-Host ($m.CSExtendSupportedSizes -f (Format-DetailedSize $minimum),
+            (Format-DetailedSize $maximum), (Format-DetailedSize $target))
+    }
+    if ($target -gt $maximum) { throw $m.CSExtendAboveMaximum }
+    if ($target -lt $minimum) { throw $m.CSExtendBelowMinimum }
+}
+
 # Grow a healthy, registered NTFS Recovery ONLY into its immediately adjacent
 # unallocated space. Never change its GPT type, move or recreate partitions.
 function Invoke-CSExtendRecovery {
@@ -1372,10 +1395,7 @@ function Invoke-CSExtendRecovery {
             [string]$reVol.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
         Assert-CSPendingRebootClear
         Assert-CSBitLockerOff
-        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
-            -PartitionNumber $partNumber -ErrorAction Stop
-        if ($null -eq $supported -or $target -gt [int64]$supported.SizeMax -or
-            $target -lt [int64]$supported.SizeMin) { throw $m.CSExtendUnsupported }
+        Assert-CSExtensionSupportedSize $Disk $partNumber $target -ShowRange
         Write-Host ($m.CSExtendPreflightPassed -f (Format-DetailedSize ($target - $oldSize))) -ForegroundColor Green
         Write-Host ''
         Write-Host ('=== ' + $m.CSExtendConfirmTitle + ' ===') -ForegroundColor Cyan
@@ -1400,10 +1420,7 @@ function Invoke-CSExtendRecovery {
             [int]$liveRe.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
         Assert-CSPendingRebootClear
         Assert-CSBitLockerOff
-        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
-            -PartitionNumber $partNumber -ErrorAction Stop
-        if ($target -gt [int64]$supported.SizeMax -or
-            $target -lt [int64]$supported.SizeMin) { throw $m.CSExtendUnsupported }
+        Assert-CSExtensionSupportedSize $Disk $partNumber $target
         Write-Host $m.CSExtendApplying -ForegroundColor Cyan
         $script:CSExecMutated = $true
         Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber `

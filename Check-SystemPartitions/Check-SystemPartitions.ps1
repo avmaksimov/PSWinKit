@@ -464,8 +464,49 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
     return [pscustomobject]@{ Start = [int64]$sorted[0].Offset; End = [int64]$edge }
 }
 function Read-CSRecoveryExtensionMiB([int64]$maximum) {
+    # Read-Host cannot show an editable prefilled value. Use a small numeric
+    # console input for ConsoleHost; keep Read-Host for other hosts.
+    $interactiveConsole = $false
+    if ($Host.Name -eq 'ConsoleHost') {
+        try {
+            $interactiveConsole = (-not [Console]::IsInputRedirected -and
+                -not [Console]::IsOutputRedirected)
+        } catch { }
+    }
     while ($true) {
-        $answer = Read-Host ($m.CSExtendSizePrompt -f $maximum)
+        if ($interactiveConsole) {
+            Write-Host -NoNewline (($m.CSExtendSizePrompt -f $maximum) + ': ')
+            $answer = [string]$maximum
+            [Console]::Write($answer)
+            while ($true) {
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq [ConsoleKey]::Enter) {
+                    [Console]::WriteLine()
+                    break
+                }
+                if ($key.Key -eq [ConsoleKey]::Backspace) {
+                    if ($answer.Length -gt 0) {
+                        $answer = $answer.Substring(0, $answer.Length - 1)
+                        [Console]::Write("`b `b")
+                    }
+                } elseif ($key.Key -eq [ConsoleKey]::Delete -or
+                    ($key.Key -eq [ConsoleKey]::A -and
+                     ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+                    while ($answer.Length -gt 0) {
+                        $answer = $answer.Substring(0, $answer.Length - 1)
+                        [Console]::Write("`b `b")
+                    }
+                } elseif ($key.KeyChar -ge '0' -and $key.KeyChar -le '9' -and
+                    $answer.Length -lt ([string]$maximum).Length) {
+                    $answer += [string]$key.KeyChar
+                    [Console]::Write($key.KeyChar)
+                }
+            }
+        } else {
+            # Without a physical console, no safe universal way exists to
+            # prefill Read-Host. Blank still skips, and all valid sizes work.
+            $answer = Read-Host ($m.CSExtendSizePromptFallback -f $maximum)
+        }
         if ([string]::IsNullOrWhiteSpace($answer)) { return [int64]0 }
         [int64]$amount = 0
         if ([int64]::TryParse($answer.Trim(), [ref]$amount) -and
