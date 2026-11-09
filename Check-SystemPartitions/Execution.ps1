@@ -144,20 +144,18 @@ function Assert-CSBitLockerOff {
     } catch {
         if ($_.Exception.Message -eq $m.CSExecBitLockerBlocked) { throw }
         $wmiError = $_
-        # On Windows Server, the BitLocker WMI namespace is not registered until
-        # the BitLocker feature is installed. Treat ONLY the exact combination of
-        # a missing cmdlet, an absent WMI namespace and a verified uninstalled
-        # server feature as non-applicable; any other failure remains blocking.
-        $noWmiNamespace = (([string]$wmiError.Exception.StatusCode -eq 'InvalidNamespace') -or
-            ([int64]$wmiError.Exception.HResult -eq -2147217394))
-        if ($null -eq $bitLockerCommand -and $noWmiNamespace) {
+        # On Windows Server, an uninstalled BitLocker feature does not provide
+        # Get-BitLockerVolume or the encryption WMI provider. Check the server
+        # feature state independently of the (provider-specific) WMI error code.
+        # Only reach this path after both methods failed to establish a safe state.
+        if ($null -eq $bitLockerCommand) {
             try {
                 $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
                 if ([int]$os.ProductType -in @(2, 3) -and
                     $null -ne (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue)) {
                     $features = @(Get-WindowsFeature -Name 'BitLocker' -ErrorAction Stop)
                     if ($features.Count -eq 1 -and
-                        [string]$features[0].InstallState -eq 'Available') {
+                        [string]$features[0].InstallState -in @('Available', 'Removed')) {
                         Write-Host $m.CSBitLockerFeatureNotInstalled -ForegroundColor Yellow
                         return
                     }
