@@ -842,6 +842,22 @@ try {
             } catch {
                 Write-Warning ($m.CSFinalReadbackFailed -f $_.Exception.Message)
             }
+            # Old rescue stages were shown but retained while WinRE was disabled.
+            # Offer cleanup after a successful repair, never without confirmation.
+            if ($optimiseC -and -not $reInfo.Enabled) {
+                try {
+                    $repairedRE = Get-WinReSnapshot
+                    if ($repairedRE.Enabled -and
+                        $null -ne $repairedRE.DiskNumber -and
+                        $null -ne $repairedRE.PartitionNumber -and
+                        [int]$repairedRE.DiskNumber -eq [int]$disk.Number) {
+                        Invoke-CSOfferOldStagingCleanup -WinReEnabled
+                    }
+                } catch {
+                    if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                    Write-Warning $_.Exception.Message
+                }
+            }
         }
     }
     $script:CSRunHandled = $true
