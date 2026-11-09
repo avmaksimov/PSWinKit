@@ -463,58 +463,6 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
     foreach ($part in $sorted) { $edge = [math]::Max($edge, (Get-PartitionEnd $part)) }
     return [pscustomobject]@{ Start = [int64]$sorted[0].Offset; End = [int64]$edge }
 }
-function Read-CSRecoveryExtensionMiB([int64]$maximum) {
-    # Read-Host cannot show an editable prefilled value. Use a small numeric
-    # console input for ConsoleHost; keep Read-Host for other hosts.
-    $interactiveConsole = $false
-    if ($Host.Name -eq 'ConsoleHost') {
-        try {
-            $interactiveConsole = (-not [Console]::IsInputRedirected -and
-                -not [Console]::IsOutputRedirected)
-        } catch { }
-    }
-    while ($true) {
-        if ($interactiveConsole) {
-            Write-Host -NoNewline (($m.CSExtendSizePrompt -f $maximum) + ': ')
-            $answer = [string]$maximum
-            [Console]::Write($answer)
-            while ($true) {
-                $key = [Console]::ReadKey($true)
-                if ($key.Key -eq [ConsoleKey]::Enter) {
-                    [Console]::WriteLine()
-                    break
-                }
-                if ($key.Key -eq [ConsoleKey]::Backspace) {
-                    if ($answer.Length -gt 0) {
-                        $answer = $answer.Substring(0, $answer.Length - 1)
-                        [Console]::Write("`b `b")
-                    }
-                } elseif ($key.Key -eq [ConsoleKey]::Delete -or
-                    ($key.Key -eq [ConsoleKey]::A -and
-                     ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
-                    while ($answer.Length -gt 0) {
-                        $answer = $answer.Substring(0, $answer.Length - 1)
-                        [Console]::Write("`b `b")
-                    }
-                } elseif ($key.KeyChar -ge '0' -and $key.KeyChar -le '9' -and
-                    $answer.Length -lt ([string]$maximum).Length) {
-                    $answer += [string]$key.KeyChar
-                    [Console]::Write($key.KeyChar)
-                }
-            }
-        } else {
-            # Without a physical console, no safe universal way exists to
-            # prefill Read-Host. Blank still skips, and all valid sizes work.
-            $answer = Read-Host ($m.CSExtendSizePromptFallback -f $maximum)
-        }
-        if ([string]::IsNullOrWhiteSpace($answer)) { return [int64]0 }
-        [int64]$amount = 0
-        if ([int64]::TryParse($answer.Trim(), [ref]$amount) -and
-            $amount -ge 1 -and $amount -le $maximum) { return $amount }
-        Write-Host ($m.CSExtendSizeInvalid -f $maximum) -ForegroundColor Yellow
-    }
-}
-
 function Read-YesNo([string]$prompt) {
     # Visually separate the final destructive confirmation from the backup
     # acknowledgement and other preflight output, in every language.
@@ -640,11 +588,6 @@ try {
         $assessment $vol $usableBounds
     $geometryCandidate = if ($null -ne $proposal) { $proposal.Geometry } else { $null }
     $canPreviewC = ($null -ne $geometryCandidate -and $geometryCandidate.IsGeometryPossible)
-    $extensionCandidate = Get-CSRecoveryExtension $disk $parts $activeRecovery $reInfo $usableBounds
-    # Never offer an operation on unverified recovery content.
-    if (-not $assessment.Verified) { $extensionCandidate = $null }
-    [int64]$extensionMiB = 0
-    $extensionPlan = $null
     $cRow = @($rows | Where-Object { $_.Kind -eq 'Windows' } | Select-Object -First 1)
     if ($cRow.Count -eq 1 -and $canPreviewC) {
         if ($proposal.Beauty) {
@@ -687,7 +630,7 @@ try {
         }
         Write-Host $m.CS28AuditDisclaimer -ForegroundColor Yellow
     }
-    $hasChoices = ($canPreviewC -or $null -ne $extensionCandidate -or $candidates.Count -gt 0)
+    $hasChoices = ($canPreviewC -or $candidates.Count -gt 0)
     if ($hasChoices) {
         Write-Host ''
         Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
@@ -708,24 +651,6 @@ try {
                     (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes))))
             } else {
                 $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
-            }
-        }
-        if ($null -ne $extensionCandidate -and -not $optimiseC) {
-            Write-Host ($m.CSExtendAvailable -f $activeRecovery.PartitionNumber,
-                (Format-DetailedSize ([int64]$activeRecovery.Size)),
-                (Format-FreeSpaceSize ([int64]($extensionCandidate.MaximumMiB * $script:MiB))))
-            $extensionMiB = Read-CSRecoveryExtensionMiB ([int64]$extensionCandidate.MaximumMiB)
-            if ($extensionMiB -gt 0) {
-                $extensionBytes = [int64]($extensionMiB * $script:MiB)
-                $extensionPlan = [pscustomobject]@{
-                    OldNumber = [int]$extensionCandidate.OldNumber
-                    OldSize = [int64]$extensionCandidate.OldSize
-                    NewStart = [int64]$extensionCandidate.NewStart
-                    NewSize = [int64]($extensionCandidate.OldSize + $extensionBytes)
-                    AddedBytes = $extensionBytes
-                    RightEnd = [int64]$extensionCandidate.RightEnd
-                    IsGeometryPossible = $true
-                }
             }
         }
         foreach ($candidate in $candidates) {
@@ -754,15 +679,6 @@ try {
     $anyAction = $false
     $plannedCSize = [int64]$c.Size
     $rebuildGeometry = $null
-    if ($null -ne $extensionPlan) {
-        $anyAction = $true
-        $rebuildGeometry = $extensionPlan
-        Write-Host ($m.CSExtendPlan -f $activeRecovery.PartitionNumber,
-            (Format-DetailedSize ([int64]$extensionPlan.OldSize)),
-            (Format-DetailedSize ([int64]$extensionPlan.NewSize)),
-            (Format-DetailedSize ([int64]$extensionPlan.AddedBytes)))
-        Write-Host $m.CSExtendPlanNotice -ForegroundColor DarkGray
-    }
     if ($optimiseC) {
         $anyAction = $true
         $plannedCSize = [int64]$proposal.TargetPartitionBytes
@@ -913,10 +829,6 @@ try {
                     -RebuildGeometry $rebuildGeometry -AdditionalDeletions $selectedAudits
             }
             $coreSucceeded = [bool]$script:CSExecLastSucceeded
-        } elseif ($null -ne $extensionPlan) {
-            Invoke-CSExtendRecovery -Disk $disk -C $c -Parts $parts `
-                -ActiveRecovery $activeRecovery -ReInfo $reInfo -Extension $extensionPlan
-            $coreSucceeded = [bool]$script:CSExecLastSucceeded
         } elseif ($selectedAudits.Count -gt 0) {
             # Optional deletions retain their separate audited confirmations.
             $coreSucceeded = $true
@@ -926,7 +838,7 @@ try {
             Write-Host ''
             Write-Host ('=== ' + $m.CS28ExecuteTitle + ' ===') -ForegroundColor Yellow
             Invoke-CSOptionalPartitionDeletion -disk $disk -c $c -audits $selectedAudits `
-                -BackupAlreadyConfirmed:($optimiseC -or $null -ne $extensionPlan)
+                -BackupAlreadyConfirmed:$optimiseC
         }
         if ($coreSucceeded) {
             try {

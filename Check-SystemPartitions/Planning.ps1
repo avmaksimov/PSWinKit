@@ -171,35 +171,6 @@ function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newC
     }
 }
 
-# An optional, non-destructive extension of an already registered Recovery.
-# Uses only adjacent free space to its right; no C: resize or partition move.
-function Get-CSRecoveryExtension($disk, $parts, $activeRecovery, $reInfo, $bounds) {
-    if ($null -eq $activeRecovery -or -not $reInfo.Enabled -or
-        [string]$disk.PartitionStyle -ne 'GPT' -or
-        [int]$reInfo.DiskNumber -ne [int]$disk.Number -or
-        [int]$reInfo.PartitionNumber -ne [int]$activeRecovery.PartitionNumber -or
-        -not (Test-RecoveryPartition $activeRecovery 'GPT')) { return $null }
-    $end = Get-PartitionEnd $activeRecovery
-    $next = @($parts | Where-Object {
-        [int]$_.PartitionNumber -ne [int]$activeRecovery.PartitionNumber -and
-        [int64]$_.Offset -ge $end
-    } | Sort-Object Offset)
-    if ($next.Count -gt 0) { $limit = [int64]$next[0].Offset }
-    elseif ($null -ne $bounds) { $limit = [int64]$bounds.End }
-    else { return $null }
-    if ($null -ne $bounds) { $limit = [int64][math]::Min($limit, [int64]$bounds.End) }
-    if ($limit -le $end) { return $null }
-    $maxMiB = [int64][math]::Floor(($limit - $end) / [double]$script:MiB)
-    if ($maxMiB -lt 1) { return $null }
-    return [pscustomobject]@{
-        OldNumber = [int]$activeRecovery.PartitionNumber
-        OldSize = [int64]$activeRecovery.Size
-        NewStart = [int64]$activeRecovery.Offset
-        MaximumMiB = $maxMiB
-        RightEnd = $limit
-    }
-}
-
 function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $assessment, $volume, $bounds) {
     if ($null -eq $activeRecovery -and $null -ne $assessment.Existing) {
