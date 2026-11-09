@@ -550,6 +550,7 @@ try {
     $rows = @(New-PartitionRows $disk $c $parts $reInfo $usableBounds $volumeSizes)
     $activeRecovery = Get-ActiveRecovery $parts $reInfo ([int]$disk.Number) ([string]$disk.PartitionStyle)
 
+    Write-Host ''
     Write-Host ('=== ' + $m.CSAnalysisTitle + ' ===') -ForegroundColor Cyan
     Write-Host ($m.CSInfoDisk -f $disk.Number, $disk.PartitionStyle, (Format-PartitionSize ([int64]$disk.Size)))
     $reText = if ($reInfo.Enabled) { $m.CSWinREEnabled } else { $m.CSWinREDisabled }
@@ -597,7 +598,14 @@ try {
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve) {
                 $cRow[0].Recommendation = $m.CS284RecommendIncreaseRecovery
             } else {
-                $cRow[0].Recommendation = $m.CS26RecommendationRepair
+                $recoveryPartitions = @($parts | Where-Object {
+                    Test-RecoveryPartition $_ ([string]$disk.PartitionStyle)
+                })
+                if (-not $reInfo.Enabled -and $recoveryPartitions.Count -eq 0) {
+                    $cRow[0].Recommendation = $m.CS26RecommendationCreateMissing
+                } else {
+                    $cRow[0].Recommendation = $m.CS26RecommendationRepair
+                }
             }
         }
     }
@@ -609,7 +617,6 @@ try {
     Write-Host $m.CS27ReadOnlyUntilConfirm -ForegroundColor Yellow
     if ($null -eq $vol) { Write-Host $m.CSPlanNoCapacity -ForegroundColor Yellow }
     if ($reInfo.Enabled -and $null -eq $activeRecovery) { Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow }
-    if (-not $reInfo.Enabled) { Write-Host $m.CSWinRERepairNeeded -ForegroundColor Yellow }
 
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false

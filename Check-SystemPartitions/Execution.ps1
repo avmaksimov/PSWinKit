@@ -893,6 +893,7 @@ function Invoke-CSCRecoveryExecution {
             $sizes = Get-PartitionSupportedSize -DiskNumber ([int]$Disk.Number) `
                 -PartitionNumber ([int]$C.PartitionNumber) -ErrorAction Stop
             if ([int64]$Proposal.TargetPartitionBytes -gt [int64]$sizes.SizeMax) { throw $m.CSExecGrowBlocked }
+            Write-Host ($m.CSGrowResizeStart -f (Format-DetailedSize ([int64]$Proposal.ChangeBytes)))
             try {
                 Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber ([int]$C.PartitionNumber) `
                     -Size ([uint64]$Proposal.TargetPartitionBytes) -ErrorAction Stop
@@ -906,6 +907,9 @@ function Invoke-CSCRecoveryExecution {
         $nowC = Get-Partition -DriveLetter C -ErrorAction Stop
         if ([int64]$nowC.Offset -ne [int64]$C.Offset -or
             [int64]$nowC.Size -ne [int64]$Proposal.TargetPartitionBytes) { throw $m.CSExecCMismatch }
+        if ([int64]$Proposal.ChangeBytes -gt 0) {
+            Write-Host $m.CSGrowResizeSuccess -ForegroundColor Green
+        }
         $newStart = Align-UpMiB (Get-PartitionEnd $nowC)
         if ([int64]$newStart -ne [int64]$RebuildGeometry.NewStart) { throw $m.CSExecLayoutChanged }
         Write-Host $m.CSExecCreateRecovery
@@ -974,8 +978,9 @@ function Invoke-CSCRecoveryExecution {
             Write-Host ($m.CS27ConfigRestored -f $restored)
             $vol = Get-Volume -Partition $newP -ErrorAction Stop
             if ([int64]$vol.SizeRemaining -lt 250MB) { throw $m.CSExecRecoveryTooSmall }
-            Write-Host $m.CSExecRegisterRecovery
+            Write-Host ($m.CSExecSetReimage -f $folder)
             Invoke-CSExternal 'reagentc.exe' @('/setreimage','/path',$folder)
+            Write-Host $m.CSExecEnableReagentc
             Invoke-CSExternal 'reagentc.exe' @('/enable')
             $nowRE = Get-WinReSnapshot
             if (-not $nowRE.Enabled -or [int]$nowRE.DiskNumber -ne [int]$Disk.Number -or
@@ -997,7 +1002,6 @@ function Invoke-CSCRecoveryExecution {
         $completed = $true
         $script:CSExecLastSucceeded = $true
         Write-Host $m.CSExecComplete -ForegroundColor Green
-        Write-Host ((& reagentc.exe /info) | Out-String)
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
@@ -1220,6 +1224,7 @@ function Invoke-CSCreateMissingRecovery {
                 throw $m.CSExecGrowBlocked
             }
             $script:CSExecMutated = $true
+            Write-Host ($m.CSGrowResizeStart -f (Format-DetailedSize ([int64]$Proposal.ChangeBytes)))
             try {
                 Resize-Partition -DiskNumber ([int]$Disk.Number) `
                     -PartitionNumber ([int]$C.PartitionNumber) `
@@ -1242,6 +1247,9 @@ function Invoke-CSCreateMissingRecovery {
             [int64]$nowC.Offset -ne [int64]$C.Offset -or
             [int64]$nowC.Size -ne [int64]$Proposal.TargetPartitionBytes) {
             throw $m.CSExecCMismatch
+        }
+        if ([int64]$Proposal.ChangeBytes -gt 0) {
+            Write-Host $m.CSGrowResizeSuccess -ForegroundColor Green
         }
         $newStart = Align-UpMiB (Get-PartitionEnd $nowC)
         if ($newStart -ne [int64]$RebuildGeometry.NewStart) { throw $m.CSExecLayoutChanged }
@@ -1286,8 +1294,9 @@ function Invoke-CSCreateMissingRecovery {
             if ((Get-CSFileSha256 $dest) -ne $stageHash) { throw $m.CSExecHashMismatch }
             $reVol = Get-Volume -Partition $newP -ErrorAction Stop
             if ([int64]$reVol.SizeRemaining -lt 250MB) { throw $m.CSExecRecoveryTooSmall }
-            Write-Host $m.CSExecRegisterRecovery
+            Write-Host ($m.CSExecSetReimage -f $folder)
             Invoke-CSExternal 'reagentc.exe' @('/setreimage','/path',$folder)
+            Write-Host $m.CSExecEnableReagentc
             Invoke-CSExternal 'reagentc.exe' @('/enable')
             $registered = Get-WinReSnapshot
             if (-not $registered.Enabled -or
@@ -1311,7 +1320,6 @@ function Invoke-CSCreateMissingRecovery {
         $completed = $true
         $script:CSExecLastSucceeded = $true
         Write-Host $m.CSNewComplete -ForegroundColor Green
-        Write-Host ((& reagentc.exe /info) | Out-String)
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
