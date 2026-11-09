@@ -198,9 +198,11 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $minRecovery = [int64]$assessment.MinRecoveryBytes
     $fsBytes = [int64]$volume.Size
     $fsDelta = [int64][math]::Max(0, $originalCSize - $fsBytes)
-    # For a new Recovery, cap its size instead of filling all free space.
-    # The existing-Recovery code ignores this extra argument entirely.
-    $maxNewSize = [int64]($minRecovery + 512MB)
+    # A new Recovery has a 512 MiB growth allowance plus the existing
+    # 16 MiB formatting variation allowance INSIDE the partition. Do not
+    # reserve an additional unallocated 16 MiB between Recovery and the next
+    # existing partition. The existing-Recovery path ignores this cap.
+    $maxNewSize = [int64]($minRecovery + 512MB + $script:CSFormatVariation)
     $originalGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $originalCSize $bounds $maxNewSize
     if ($null -eq $originalGeo) { return $null }
     $rightEnd = if ($null -eq $activeRecovery) {
@@ -214,11 +216,11 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
          [int64]$assessment.FreeBytes -lt $script:CSFreeReserve))
     $baseC = $originalCSize
     if ($mustRepair -and [int64]$originalGeo.NewSize -lt $minRecovery) {
-        # A newly created Recovery gets 512 MiB growth allowance when shrink
-        # is needed, plus a small 16 MiB alignment/formatting margin.
-        $reserve = if ($null -eq $activeRecovery) { [int64]$script:CSFormatVariation } else { [int64]0 }
+        # Keep the complete allocation inside Recovery: the new-partition
+        # NTFS margin is already included in $maxNewSize. Only normal
+        # alignment gaps (if any) may remain after partition creation.
         $targetRe = if ($null -eq $activeRecovery) { $maxNewSize } else { $minRecovery }
-        $maxEnd = Align-DownMiB ([int64]($rightEnd - $targetRe - $reserve))
+        $maxEnd = Align-DownMiB ([int64]($rightEnd - $targetRe))
         $baseC = [int64]($maxEnd - [int64]$c.Offset)
         if ($null -eq $activeRecovery -and $baseC -gt $originalCSize) { $baseC = $originalCSize }
         if ($baseC -le 0) { return $null }

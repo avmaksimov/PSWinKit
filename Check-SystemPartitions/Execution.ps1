@@ -64,19 +64,34 @@ function Invoke-CSOfferOldStagingCleanup([switch]$WinReEnabled) {
                 Write-Host ($m.CS27OldStageUnsafe -f $dir.FullName) -ForegroundColor Red
                 return
             }
-            $size = Get-CSStagingTreeSize $dir.FullName
-            $row = [ordered]@{}
-            $row[[string]$m.CSOldStageColumnFolder] = $dir.Name
-            $row[[string]$m.CSOldStageColumnCreated] = $dir.CreationTime.ToString('G')
-            $row[[string]$m.CSOldStageColumnSize] = Format-PartitionSize $size
-            [pscustomobject]$row
+            [pscustomobject]@{
+                Folder = $dir.Name
+                Created = $dir.CreationTime.ToString('G')
+                Size = (Format-PartitionSize (Get-CSStagingTreeSize $dir.FullName))
+            }
         }
     )
     if ($tableRows.Count -ne $dirs.Count) { return }
     Write-Host ''
     Write-Host $m.CS27OldStageTitle -ForegroundColor Cyan
     Write-Host ($m.CSOldStageLocation -f $base)
-    Write-Host (($tableRows | Format-Table -AutoSize | Out-String -Width 100).TrimEnd())
+    # Fixed column alignment avoids Format-Table squeezing long Stage-* names
+    # together with the date, especially with localized date/number strings.
+    $folderWidth = ([string]$m.CSOldStageColumnFolder).Length
+    $dateWidth = ([string]$m.CSOldStageColumnCreated).Length
+    $sizeWidth = ([string]$m.CSOldStageColumnSize).Length
+    foreach ($row in $tableRows) {
+        $folderWidth = [math]::Max($folderWidth, $row.Folder.Length)
+        $dateWidth = [math]::Max($dateWidth, $row.Created.Length)
+        $sizeWidth = [math]::Max($sizeWidth, $row.Size.Length)
+    }
+    $header = '{0,-' + $folderWidth + '}  {1,-' + $dateWidth + '}  {2,' + $sizeWidth + '}'
+    Write-Host ($header -f $m.CSOldStageColumnFolder, $m.CSOldStageColumnCreated, $m.CSOldStageColumnSize)
+    Write-Host ($header -f ('-' * $folderWidth), ('-' * $dateWidth), ('-' * $sizeWidth))
+    foreach ($row in $tableRows) {
+        Write-Host ($header -f $row.Folder, $row.Created, $row.Size)
+    }
+    Write-Host ''
     if (-not $WinReEnabled) {
         Write-Host $m.CS27OldStageKeep -ForegroundColor Yellow
         return

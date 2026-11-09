@@ -798,7 +798,13 @@ try {
             Write-Host $m.CSPreviewBoundsFallback -ForegroundColor Yellow
         }
     } else {
-        Write-Host $m.CSPlanNoActions
+        if ($reInfo.Enabled -and $null -ne $activeRecovery -and
+            $assessment.Verified -and $null -ne $assessment.FreeBytes -and
+            [int64]$assessment.FreeBytes -ge $script:CSFreeReserve) {
+            Write-Host $m.CSPlanAlreadyHealthy -ForegroundColor Green
+        } else {
+            Write-Host $m.CSPlanNoActions
+        }
     }
     if (@($rows | Where-Object { $_.Kind -eq 'EFI' -and $_.Recommendation -eq $m.CSRecommendEFIAfterC }).Count -gt 0) {
         Write-Host $m.CSPlanManualEFI -ForegroundColor DarkGray
@@ -826,9 +832,8 @@ try {
         } elseif ($selectedAudits.Count -gt 0) {
             # Optional deletions retain their separate audited confirmations.
             $coreSucceeded = $true
-        } else {
-            Write-Host $m.CSExecNoPlan -ForegroundColor Green
         }
+        # No action is also reported above in the proposed plan, only once.
         if ($coreSucceeded -and $selectedAudits.Count -gt 0) {
             Write-Host ''
             Write-Host ('=== ' + $m.CS28ExecuteTitle + ' ===') -ForegroundColor Yellow
