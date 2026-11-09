@@ -113,7 +113,7 @@ function Assert-PSWinKitSafeFilePathComponent {
     catch {
         throw ('{0} (reparse tag read failed: {1})' -f ($ErrorMessage -f $Path), $_.Exception.Message)
     }
-    if ($tag -ne [uint32]0x80000013) {
+    if ($tag -ne [Convert]::ToUInt32('80000013', 16)) {
         throw ('{0} (reparse tag 0x{1:X8})' -f ($ErrorMessage -f $Path), [uint32]$tag)
     }
 }
