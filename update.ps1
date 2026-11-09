@@ -92,6 +92,7 @@ try {
     $downloadUrl = $url + '?cacheBust=' + [guid]::NewGuid().ToString('N')
     Invoke-WebRequest -Uri $downloadUrl -Headers $noCacheHeaders -OutFile $zip -UseBasicParsing -ErrorAction Stop
     if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw $m.ZipMissing }
+    Write-Host $m.Extracting
     Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force -ErrorAction Stop
     $roots = @(Get-ChildItem -LiteralPath $extract -Directory)
     if ($roots.Count -ne 1) { throw $m.InvalidZipRoot }

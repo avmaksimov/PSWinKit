@@ -144,6 +144,7 @@ try {
         throw ($m.LinkPath -f $target)
     }
     $sourceRoot = $PSScriptRoot.TrimEnd('\')
+    Write-Host $m.ComparingFiles
     # Find all repository files, including nested folders; omit dot-prefixed
     # items, this installer and the locally generated install.psd1.
     $sourceFiles = @(
