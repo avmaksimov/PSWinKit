@@ -13,6 +13,7 @@ $script:CSExecMountAttached = $false
 $script:CSExecCurrentVolumeSize = $null
 $script:CSExecCurrentVolumeFree = $null
 $script:CSBitLockerNoticePrinted = $false
+$script:CSDiskPartTempCleaned = 0
 
 # Stage directories can remain after a crash or a failed destructive operation.
 # Never delete an arbitrary path or a directory containing reparse points.
@@ -559,7 +560,7 @@ function Assert-CSExecutionPreflight($disk, $c, $parts, $recovery, $reInfo, $pro
     if ($recovery.IsSystem -or $recovery.IsBoot -or $recovery.IsActive) { throw $m.CSExecRecoveryUnsafe }
     $cVolume = Get-Volume -DriveLetter C -ErrorAction Stop
     if ([string]$cVolume.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
-    if ([string]$cVolume.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecDiskUnsafe }
+    if ([string]$cVolume.HealthStatus -notin @('Healthy','0','ScanNeeded','1','SpotFixNeeded','2','FullRepairNeeded','3')) { throw $m.CSExecDiskUnsafe }
 
     if ([int64]$c.Offset -lt 1MB -or ([int64]$c.Offset % 512) -ne 0) { throw $m.CSExecLayoutUnsupported }
     if ($null -eq $geo -or -not $geo.IsGeometryPossible) { throw $m.CSExecLayoutUnsupported }
@@ -615,17 +616,102 @@ function Assert-CSAfterCResize($disk, $c, $oldRecovery, $targetBytes, $snapshot)
     }
 }
 
+# Run online NTFS check ONLY after the final partition-change confirmation.
+# If corruption is detected, offer an independent approval for a boot-time fix,
+# do not touch the partition table, and always exit the current execution path.
+function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
+    Write-Host ''
+    Write-Host $m.CSFsScanStart -ForegroundColor Cyan
+    Assert-CSLayoutUnchanged $disk $snapshot
+    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+    if ([int]$liveC.DiskNumber -ne [int]$disk.Number -or
+        [int]$liveC.PartitionNumber -ne [int]$c.PartitionNumber -or
+        [int64]$liveC.Offset -ne [int64]$c.Offset -or
+        [int64]$liveC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
+    $vol = Get-Volume -DriveLetter C -ErrorAction Stop
+    if ([string]$vol.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
+
+    # Repair-Volume -Scan does not run offline repairs or dismount C:.
+    # Treat all unknown/no-output/error conditions as NOT proven healthy.
+    $scanProblem = $null
+    $scanStatus = ''
+    try {
+        $statuses = @(Repair-Volume -DriveLetter C -Scan -Confirm:$false -ErrorAction Stop)
+        if ($statuses.Count -ne 1 -or $null -eq $statuses[0]) {
+            $scanProblem = $m.CSFsScanUnexpected -f ($statuses -join ', ')
+        } else {
+            $scanStatus = [string]$statuses[0]
+        }
+    } catch {
+        $scanProblem = $m.CSFsScanFailure -f $_.Exception.Message
+    }
+    $after = Get-Volume -DriveLetter C -ErrorAction Stop
+    if ([string]$after.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
+    Assert-CSLayoutUnchanged $disk $snapshot
+    if (-not $scanProblem -and $scanStatus -in @('NoErrorsFound','0') -and
+        [string]$after.HealthStatus -in @('Healthy','0')) {
+        Write-Host $m.CSFsScanClean -ForegroundColor Green
+        return $true
+    }
+    if ($scanProblem) {
+        Write-Host $scanProblem -ForegroundColor Yellow
+    } else {
+        Write-Host ($m.CSFsScanNeedsRepair -f $scanStatus, ([string]$after.HealthStatus)) -ForegroundColor Yellow
+    }
+    Write-Host $m.CSFsScanExecutionStopped -ForegroundColor Yellow
+    if (-not (Read-YesNo $m.CSFsScheduleQuestion)) {
+        Write-Host $m.CSFsScheduleDeclined -ForegroundColor Yellow
+        return $false
+    }
+    # Scheduling is separately approved; it is NOT authorized by the earlier
+    # consent to change partition geometry. No reboot is triggered.
+    # chkntfs /c schedules checks on startup for dirty volumes, hence mark C:
+    # dirty explicitly after the scan. Check native process exit codes.
+    Write-Host $m.CSFsScheduling -ForegroundColor Cyan
+    $out = @(& fsutil.exe dirty set C: 2>&1)
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { throw ($m.CSFsScheduleFailed -f ('fsutil dirty set C:'), $code, ($out -join ' ')) }
+    $out = @(& chkntfs.exe /c C: 2>&1)
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Write-Host $m.CSFsDirtyMarked -ForegroundColor Yellow
+        throw ($m.CSFsScheduleFailed -f ('chkntfs /c C:'), $code, ($out -join ' '))
+    }
+    Write-Host $m.CSFsScheduledReboot -ForegroundColor Yellow
+    return $false
+}
+
+# DiskPart scripts are always placed in the Windows TEMP directory. A normal
+# invocation deletes each script explicitly; aborted processes leave only
+# a random .txt file under TEMP for optional later OS cleanup.
+function New-CSDiskPartTempFile([string[]]$commands) {
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('PSWinKit-DiskPart-' +
+        [guid]::NewGuid().ToString('N') + '.txt')
+    [IO.File]::WriteAllLines($path, $commands, [Text.Encoding]::ASCII)
+    return $path
+}
+function Remove-CSDiskPartTempFile([string]$path) {
+    try {
+        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+        $script:CSDiskPartTempCleaned++
+    } catch {
+        Write-Warning ($m.CSDiskPartTempRemovalFailed -f $path, $_.Exception.Message)
+    }
+}
+function Show-CSTemporaryCleanupResult([bool]$stageRemoved) {
+    if ($stageRemoved) { Write-Host $m.CSTemporaryStageRemoved -ForegroundColor DarkGray }
+    if ($script:CSDiskPartTempCleaned -gt 0) {
+        Write-Host ($m.CSDiskPartTempRemoved -f $script:CSDiskPartTempCleaned) -ForegroundColor DarkGray
+    }
+}
+
 function Invoke-CSDiskPart([string[]]$commands) {
-    # Extension of an existing Recovery needs no WinRE image staging folder.
-    $scriptDirectory = if ($script:CSExecStaging) { $script:CSExecStaging }
-                       else { [IO.Path]::GetTempPath() }
-    $f = Join-Path $scriptDirectory ([guid]::NewGuid().ToString('N') + '.txt')
-    [IO.File]::WriteAllLines($f, $commands, [Text.Encoding]::ASCII)
+    $f = New-CSDiskPartTempFile $commands
     try {
         & diskpart.exe /s $f
         if ($LASTEXITCODE -ne 0) { throw $m.CSExecDiskPartFailed }
     } finally {
-        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+        Remove-CSDiskPartTempFile $f
     }
 }
 
@@ -708,16 +794,15 @@ function Set-CSRecoveryType($disk, $partNumber) {
     $p = Get-Partition -DiskNumber ([int]$disk.Number) `
         -PartitionNumber ([int]$partNumber) -ErrorAction Stop
     if (-not (Test-RecoveryPartition $p 'GPT')) { throw $m.CSExecRecoveryTypeFailed }
-    $probe = Join-Path $script:CSExecStaging ([guid]::NewGuid().ToString('N') + '.txt')
-    [IO.File]::WriteAllLines($probe, @("select disk $($disk.Number)",
-        "select partition $partNumber",'detail partition'), [Text.Encoding]::ASCII)
+    $probe = New-CSDiskPartTempFile @("select disk $($disk.Number)",
+        "select partition $partNumber",'detail partition')
     try {
         $output = (& diskpart.exe /s $probe 2>&1 | Out-String)
         if ($LASTEXITCODE -ne 0 -or $output -notmatch '(?i)0x8000000000000001') {
             throw $m.CSExecRecoveryTypeFailed
         }
     } finally {
-        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        Remove-CSDiskPartTempFile $probe
     }
 }
 
@@ -734,6 +819,7 @@ function Invoke-CSCRecoveryExecution {
     $script:CSExecMutated = $false
     $script:CSExecLastSucceeded = $false
     $script:CSExecStaging = $null
+    $script:CSDiskPartTempCleaned = 0
     $script:CSExecMount = $null
     $script:CSExecMountAttached = $false
     $script:CSExecCurrentVolumeSize = $null
@@ -840,6 +926,7 @@ function Invoke-CSCRecoveryExecution {
         }
         Assert-CSWim $stageWim
         if ((Get-CSFileSha256 $stageWim) -ne $stagedWimHash) { throw $m.CSExecHashMismatch }
+        if (-not (Test-CSWindowsFilesystemBeforeResize $Disk $C $snapshot)) { return }
         Write-Host $m.CSExecDisableWinRE
         $script:CSExecMutated = $true
         Invoke-CSExternal 'reagentc.exe' @('/disable')
@@ -1016,12 +1103,16 @@ function Invoke-CSCRecoveryExecution {
             try { Close-CSRecoveryMount ([int]$Disk.Number) }
             catch { Write-Warning $m.CSExecMountRetained }
         }
+        $stageRemoved = $false
         if ($completed -or -not $script:CSExecMutated) {
             if ($script:CSExecStaging -and (Test-Path -LiteralPath $script:CSExecStaging -PathType Container)) {
-                try { Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop }
-                catch { Write-Warning $m.CSExecStagingRetained }
+                try {
+                    Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop
+                    $stageRemoved = $true
+                } catch { Write-Warning ($m.CSTemporaryStageRemovalFailed -f $script:CSExecStaging, $_.Exception.Message) }
             }
         }
+        Show-CSTemporaryCleanupResult $stageRemoved
     }
 }
 
@@ -1046,7 +1137,7 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
         [int64]$currentC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
     $volume = Get-Volume -DriveLetter C -ErrorAction Stop
     if ([string]$volume.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
-    if ([string]$volume.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecDiskUnsafe }
+    if ([string]$volume.HealthStatus -notin @('Healthy','0','ScanNeeded','1','SpotFixNeeded','2','FullRepairNeeded','3')) { throw $m.CSExecDiskUnsafe }
     if ($null -eq $geo -or -not $geo.IsGeometryPossible -or
         [int64]$geo.NewSize -lt [int64]$proposal.MinimumRecoveryBytes) {
         throw $m.CSExecRecoveryTooSmall
@@ -1144,6 +1235,7 @@ function Invoke-CSCreateMissingRecovery {
     $script:CSExecMutated = $false
     $script:CSExecLastSucceeded = $false
     $script:CSExecStaging = $null
+    $script:CSDiskPartTempCleaned = 0
     $script:CSExecMount = $null
     $script:CSExecMountAttached = $false
     $stageWim = $null
@@ -1185,6 +1277,7 @@ function Invoke-CSCreateMissingRecovery {
         Write-Host $m.CSExecPostConfirmCheck -ForegroundColor DarkGray
         Assert-CSLayoutUnchanged $Disk $snapshot
         Assert-CSMissingRecoveryPreflight $Disk $C $Parts (Get-WinReSnapshot) $Proposal $RebuildGeometry
+        if (-not (Test-CSWindowsFilesystemBeforeResize $Disk $C $snapshot)) { return }
         Write-Host ('=== ' + $m.CSNewApplyingTitle + ' ===') -ForegroundColor Cyan
         if ([int64]$Proposal.ChangeBytes -lt 0) {
             Write-Host $m.CSExecShrinkC
@@ -1334,11 +1427,15 @@ function Invoke-CSCreateMissingRecovery {
             try { Close-CSRecoveryMount ([int]$Disk.Number) }
             catch { Write-Warning $m.CSExecMountRetained }
         }
+        $stageRemoved = $false
         if ($completed -or -not $script:CSExecMutated) {
             if ($script:CSExecStaging -and (Test-Path -LiteralPath $script:CSExecStaging -PathType Container)) {
-                try { Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop }
-                catch { Write-Warning $m.CSExecStagingRetained }
+                try {
+                    Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop
+                    $stageRemoved = $true
+                } catch { Write-Warning ($m.CSTemporaryStageRemovalFailed -f $script:CSExecStaging, $_.Exception.Message) }
             }
         }
+        Show-CSTemporaryCleanupResult $stageRemoved
     }
 }
