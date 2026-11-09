@@ -616,7 +616,10 @@ function Assert-CSAfterShrink($disk, $c, $oldRecovery, $targetBytes, $snapshot) 
 }
 
 function Invoke-CSDiskPart([string[]]$commands) {
-    $f = Join-Path $script:CSExecStaging ([guid]::NewGuid().ToString('N') + '.txt')
+    # Extension of an existing Recovery needs no WinRE image staging folder.
+    $scriptDirectory = if ($script:CSExecStaging) { $script:CSExecStaging }
+                       else { [IO.Path]::GetTempPath() }
+    $f = Join-Path $scriptDirectory ([guid]::NewGuid().ToString('N') + '.txt')
     [IO.File]::WriteAllLines($f, $commands, [Text.Encoding]::ASCII)
     try {
         & diskpart.exe /s $f
@@ -1303,27 +1306,76 @@ function Invoke-CSCreateMissingRecovery {
     }
 }
 
-# A Recovery partition can be adjacent to free space but still be non-resizable
-# through the Windows Storage API. Report the actual limit, without changing
-# its GPT type, attributes or Windows RE registration.
-function Assert-CSExtensionSupportedSize($disk, [int]$partitionNumber, [int64]$target,
+# Get-PartitionSupportedSize can report SizeMin == SizeMax for a protected
+# Recovery partition even with free space directly after it. This tells us
+# whether to try Resize-Partition, not whether DiskPart is allowed to extend.
+# A query failure remains a hard error: only a valid but restrictive range
+# enables fallback after all geometry, NTFS, BitLocker and WinRE checks.
+function Test-CSExtensionSupportedSize($disk, [int]$partitionNumber, [int64]$target,
     [switch]$ShowRange) {
     try {
         $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
             -PartitionNumber $partitionNumber -ErrorAction Stop
     } catch {
+        # An API failure may indicate a real storage problem, not merely a
+        # protected Recovery partition. Do not bypass an unknown error.
         throw ($m.CSExtendSizeQueryFailed -f $_.Exception.Message)
     }
     if ($null -eq $supported -or $null -eq $supported.SizeMin -or
         $null -eq $supported.SizeMax) { throw $m.CSExtendSizeUnknown }
     $minimum = [int64]$supported.SizeMin
     $maximum = [int64]$supported.SizeMax
+    if ($minimum -le 0 -or $maximum -lt $minimum) { throw $m.CSExtendSizeUnknown }
     if ($ShowRange) {
         Write-Host ($m.CSExtendSupportedSizes -f (Format-DetailedSize $minimum),
             (Format-DetailedSize $maximum), (Format-DetailedSize $target))
     }
-    if ($target -gt $maximum) { throw $m.CSExtendAboveMaximum }
-    if ($target -lt $minimum) { throw $m.CSExtendBelowMinimum }
+    $canResize = ($target -ge $minimum -and $target -le $maximum)
+    if ($ShowRange -and -not $canResize) {
+        Write-Host $m.CSExtendPowerShellUnavailable -ForegroundColor Yellow
+    }
+    return [bool]$canResize
+}
+
+# A successful DiskPart command is not enough. Verify the precise partition
+# size, all other partitions, Recovery identity/attributes, NTFS and WinRE.
+function Assert-CSAfterRecoveryExtend($disk, $snapshot, [int]$partNumber,
+    [int64]$target, [int64]$originalVolumeBytes) {
+    $after = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop | Sort-Object Offset)
+    if ($after.Count -ne $snapshot.Count) { throw $m.CSExecLayoutChanged }
+    for ($i = 0; $i -lt $after.Count; $i++) {
+        $a = $after[$i]; $b = $snapshot[$i]
+        $expectedSize = if ([int]$a.PartitionNumber -eq $partNumber) { $target } else { [int64]$b.Size }
+        if ([int]$a.PartitionNumber -ne [int]$b.PartitionNumber -or
+            [int64]$a.Offset -ne [int64]$b.Offset -or
+            [int64]$a.Size -ne $expectedSize -or
+            [string]$a.GptType -ne [string]$b.GptType -or
+            [string]$a.Guid -ne [string]$b.Guid -or
+            [bool]$a.IsReadOnly -ne [bool]$b.IsReadOnly -or
+            [bool]$a.IsHidden -ne [bool]$b.IsHidden -or
+            [bool]$a.NoDefaultDriveLetter -ne [bool]$b.NoDefaultDriveLetter -or
+            [string]$a.DriveLetter -ne [string]$b.DriveLetter) {
+            throw $m.CSExecLayoutChanged
+        }
+    }
+    $freshRe = @(Get-Partition -DiskNumber ([int]$disk.Number) `
+        -PartitionNumber $partNumber -ErrorAction Stop)
+    if ($freshRe.Count -ne 1 -or -not (Test-RecoveryPartition $freshRe[0] 'GPT') -or
+        $freshRe[0].DriveLetter) { throw $m.CSExecRecoveryUnsafe }
+    $volume = Get-Volume -Partition $freshRe[0] -ErrorAction Stop
+    if ([string]$volume.FileSystem -ne 'NTFS' -or
+        [string]$volume.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
+    # DiskPart extend should extend NTFS as well as the partition. Allow 1 MiB
+    # for a possible metadata/capacity measurement difference.
+    $original = @($snapshot | Where-Object { [int]$_.PartitionNumber -eq $partNumber })
+    if ($original.Count -ne 1) { throw $m.CSExecLayoutChanged }
+    $added = $target - [int64]$original[0].Size
+    if ([int64]$volume.Size -lt ($originalVolumeBytes + $added - 1MB)) {
+        throw $m.CSExtendFileSystemNotExtended
+    }
+    $registered = Get-WinReSnapshot
+    if (-not $registered.Enabled -or [int]$registered.DiskNumber -ne [int]$disk.Number -or
+        [int]$registered.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
 }
 
 # Grow a healthy, registered NTFS Recovery ONLY into its immediately adjacent
@@ -1339,6 +1391,10 @@ function Invoke-CSExtendRecovery {
             Size = [int64]$_.Size
             GptType = [string]$_.GptType
             Guid = [string]$_.Guid
+            IsReadOnly = [bool]$_.IsReadOnly
+            IsHidden = [bool]$_.IsHidden
+            NoDefaultDriveLetter = [bool]$_.NoDefaultDriveLetter
+            DriveLetter = [string]$_.DriveLetter
         }
     })
     $partNumber = [int]$ActiveRecovery.PartitionNumber
@@ -1395,7 +1451,9 @@ function Invoke-CSExtendRecovery {
             [string]$reVol.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
         Assert-CSPendingRebootClear
         Assert-CSBitLockerOff
-        Assert-CSExtensionSupportedSize $Disk $partNumber $target -ShowRange
+        $canResize = [bool](Test-CSExtensionSupportedSize $Disk $partNumber $target -ShowRange)
+        $originalVolumeBytes = [int64]$reVol.Size
+        if ($originalVolumeBytes -le 0) { throw $m.CSExecRecoveryUnsafe }
         Write-Host ($m.CSExtendPreflightPassed -f (Format-DetailedSize ($target - $oldSize))) -ForegroundColor Green
         Write-Host ''
         Write-Host ('=== ' + $m.CSExtendConfirmTitle + ' ===') -ForegroundColor Cyan
@@ -1420,31 +1478,88 @@ function Invoke-CSExtendRecovery {
             [int]$liveRe.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
         Assert-CSPendingRebootClear
         Assert-CSBitLockerOff
-        Assert-CSExtensionSupportedSize $Disk $partNumber $target
-        Write-Host $m.CSExtendApplying -ForegroundColor Cyan
-        $script:CSExecMutated = $true
-        Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber `
-            -Size ([uint64]$target) -Confirm:$false -ErrorAction Stop
-        $after = @(Get-Partition -DiskNumber ([int]$Disk.Number) -ErrorAction Stop | Sort-Object Offset)
-        if ($after.Count -ne $snapshot.Count) { throw $m.CSExecLayoutChanged }
-        for ($i = 0; $i -lt $after.Count; $i++) {
-            $a = $after[$i]; $b = $snapshot[$i]
-            $expectedSize = if ([int]$a.PartitionNumber -eq $partNumber) { $target } else { [int64]$b.Size }
-            if ([int]$a.PartitionNumber -ne [int]$b.PartitionNumber -or
-                [int64]$a.Offset -ne [int64]$b.Offset -or
-                [int64]$a.Size -ne $expectedSize -or
-                [string]$a.GptType -ne [string]$b.GptType -or
-                [string]$a.Guid -ne [string]$b.Guid) { throw $m.CSExecLayoutChanged }
+        # Recheck supported size after confirmation. A fixed range is normal
+        # for some Recovery partitions and does not prohibit a DiskPart trial.
+        $canResize = [bool](Test-CSExtensionSupportedSize $Disk $partNumber $target)
+        $usedDiskPart = $false
+        if ($canResize) {
+            Write-Host $m.CSExtendResizeStart
+            $script:CSExecMutated = $true
+            $resizeFailure = $null
+            try {
+                Resize-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber `
+                    -Size ([uint64]$target) -Confirm:$false -ErrorAction Stop
+            } catch { $resizeFailure = $_ }
+            if ($null -eq $resizeFailure) {
+                Assert-CSAfterRecoveryExtend $Disk $snapshot $partNumber $target $originalVolumeBytes
+                Write-Host $m.CSExtendResizeSuccess -ForegroundColor Green
+            } else {
+                $errorText = [string]$resizeFailure.Exception.Message + ' ' +
+                    [string]$resizeFailure.FullyQualifiedErrorId
+                if ($errorText -notmatch '(?i)Size\s+Not\s+Supported|0x89000021|\b4097\b|0x80070032') {
+                    throw $resizeFailure
+                }
+                Write-Host ($m.CSExtendResizeRejected -f
+                    (([string]$resizeFailure.Exception.Message -split '[\r\n]')[0]).Trim()) -ForegroundColor Yellow
+                $usedDiskPart = $true
+            }
+        } else {
+            Write-Host $m.CSExtendResizeSkipped -ForegroundColor Yellow
+            $usedDiskPart = $true
         }
-        $freshRe = @(Get-Partition -DiskNumber ([int]$Disk.Number) -PartitionNumber $partNumber -ErrorAction Stop)
-        if ($freshRe.Count -ne 1 -or -not (Test-RecoveryPartition $freshRe[0] 'GPT') -or
-            $freshRe[0].DriveLetter) { throw $m.CSExecRecoveryUnsafe }
-        $volume = Get-Volume -Partition $freshRe[0] -ErrorAction Stop
-        if ([string]$volume.FileSystem -ne 'NTFS' -or
-            [string]$volume.HealthStatus -notin @('Healthy','0')) { throw $m.CSExecRecoveryUnsafe }
-        $registered = Get-WinReSnapshot
-        if (-not $registered.Enabled -or [int]$registered.DiskNumber -ne [int]$Disk.Number -or
-            [int]$registered.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
+        if ($usedDiskPart) {
+            # Never retry after a partial partition change or changed WinRE
+            # registration. DiskPart sees the exact same selected disk/partition.
+            Assert-CSLayoutUnchanged $Disk $snapshot
+            $liveDisk = Get-Disk -Number ([int]$Disk.Number) -ErrorAction Stop
+            Assert-CSBasicDisk $liveDisk @(Get-Partition -DiskNumber ([int]$Disk.Number) -ErrorAction Stop)
+            $currentRecovery = Get-Partition -DiskNumber ([int]$Disk.Number) `
+                -PartitionNumber $partNumber -ErrorAction Stop
+            if ([string]$currentRecovery.Guid -ne [string]$ActiveRecovery.Guid -or
+                [int64]$currentRecovery.Offset -ne [int64]$ActiveRecovery.Offset -or
+                [int64]$currentRecovery.Size -ne $oldSize -or
+                [bool]$currentRecovery.IsReadOnly -ne [bool]$ActiveRecovery.IsReadOnly -or
+                [bool]$currentRecovery.IsHidden -ne [bool]$ActiveRecovery.IsHidden -or
+                [bool]$currentRecovery.NoDefaultDriveLetter -ne [bool]$ActiveRecovery.NoDefaultDriveLetter -or
+                $currentRecovery.DriveLetter) { throw $m.CSExecLayoutChanged }
+            $liveVolume = Get-Volume -Partition $currentRecovery -ErrorAction Stop
+            if ([string]$liveVolume.FileSystem -ne 'NTFS' -or
+                [string]$liveVolume.HealthStatus -notin @('Healthy','0') -or
+                [int64]$liveVolume.Size -ne $originalVolumeBytes) { throw $m.CSExecRecoveryUnsafe }
+            $liveRe = Get-WinReSnapshot
+            if (-not $liveRe.Enabled -or [int]$liveRe.DiskNumber -ne [int]$Disk.Number -or
+                [int]$liveRe.PartitionNumber -ne $partNumber) { throw $m.CSExecRecoveryUnknown }
+            Assert-CSPendingRebootClear
+            Assert-CSBitLockerOff
+            $extendMiB = [int64](($target - $oldSize) / $script:MiB)
+            Write-Host ($m.CSExtendDiskPartStart -f $partNumber, $extendMiB) -ForegroundColor Yellow
+            $script:CSExecMutated = $true
+            $diskPartFailure = $null
+            try {
+                Invoke-CSDiskPart @("select disk $($Disk.Number)",
+                    "select partition $partNumber", ("extend size={0}" -f $extendMiB))
+            } catch {
+                $diskPartFailure = $_
+                Write-Host ($m.CSExtendDiskPartFailed -f $_.Exception.Message) -ForegroundColor Yellow
+            }
+            # Some DiskPart errors produce an exit code of zero. Read back the
+            # partition even on such "success"; no change is an error too.
+            $afterDiskPart = Get-Partition -DiskNumber ([int]$Disk.Number) `
+                -PartitionNumber $partNumber -ErrorAction Stop
+            if ([int64]$afterDiskPart.Size -eq $oldSize -and $null -eq $diskPartFailure) {
+                throw $m.CSExtendDiskPartNoChange
+            }
+            # Always verify the entire layout, even after DiskPart reports an
+            # error: partial changes must never be mistaken for safe no-ops.
+            try {
+                Assert-CSAfterRecoveryExtend $Disk $snapshot $partNumber $target $originalVolumeBytes
+            } catch {
+                if ($null -ne $diskPartFailure) { throw $diskPartFailure }
+                throw
+            }
+            if ($null -ne $diskPartFailure) { throw $diskPartFailure }
+            Write-Host $m.CSExtendDiskPartSuccess -ForegroundColor Green
+        }
         $completed = $true
         $script:CSExecLastSucceeded = $true
         Write-Host $m.CSExtendComplete -ForegroundColor Green
