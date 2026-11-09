@@ -81,53 +81,23 @@ function Test-RelativeFileName {
     return $true
 }
 
-# Read the reparse tag without following links. A deduplicated NTFS file
-# (IO_REPARSE_TAG_DEDUP) is not a symlink or junction.
+# A reparse point is not necessarily a link: NTFS Data Deduplication uses
+# IO_REPARSE_TAG_DEDUP (0x80000013). Read its tag via the built-in fsutil tool.
+# This avoids compiling platform-specific C# from PowerShell 5.1.
 function Get-PSWinKitReparseTag {
     param([Parameter(Mandatory = $true)][string]$Path)
-    if (-not ('PSWinKit.NativeReparse' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
-namespace PSWinKit {
-    public static class NativeReparse {
-        public const uint DedupTag = 0x80000013;
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct WIN32_FIND_DATA {
-            public uint dwFileAttributes;
-            public FILETIME ftCreationTime;
-            public FILETIME ftLastAccessTime;
-            public FILETIME ftLastWriteTime;
-            public uint nFileSizeHigh;
-            public uint nFileSizeLow;
-            public uint dwReserved0;
-            public uint dwReserved1;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-            public string cFileName;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
-            public string cAlternateFileName;
-        }
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindFirstFileW", SetLastError = true)]
-        private static extern IntPtr FindFirstFile(string path, out WIN32_FIND_DATA data);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool FindClose(IntPtr handle);
-        public static uint GetTag(string path) {
-            WIN32_FIND_DATA data;
-            IntPtr handle = FindFirstFile(path, out data);
-            if (handle == new IntPtr(-1)) {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-            try { return data.dwReserved0; }
-            finally { FindClose(handle); }
-        }
+
+    $output = @(& fsutil.exe reparsepoint query $Path 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw ('fsutil reparsepoint query failed (exit code {0}): {1}' -f
+            $exitCode, ($output -join ' '))
     }
-}
-'@ -ErrorAction Stop
-    }
-    return [PSWinKit.NativeReparse]::GetTag($Path)
+    # The first eight-digit hexadecimal tag in fsutil's output is the reparse tag;
+    # the surrounding description may be localized, but the tag never is.
+    $match = [regex]::Match(($output -join "`n"), '(?i)\b0x[0-9a-f]{8}\b')
+    if (-not $match.Success) { throw 'Reparse tag not found in fsutil output.' }
+    return [Convert]::ToUInt32($match.Value.Substring(2), 16)
 }
 
 # Reject reparse directories and all reparse files except Windows Data Deduplication.
@@ -143,7 +113,7 @@ function Assert-PSWinKitSafeFilePathComponent {
     catch {
         throw ('{0} (reparse tag read failed: {1})' -f ($ErrorMessage -f $Path), $_.Exception.Message)
     }
-    if ($tag -ne [PSWinKit.NativeReparse]::DedupTag) {
+    if ($tag -ne [uint32]0x80000013) {
         throw ('{0} (reparse tag 0x{1:X8})' -f ($ErrorMessage -f $Path), [uint32]$tag)
     }
 }
