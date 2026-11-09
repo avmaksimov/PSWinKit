@@ -361,7 +361,9 @@ function Assert-CSLayoutUnchanged($disk, $snapshot) {
         if ([int]$a.PartitionNumber -ne [int]$b.PartitionNumber -or
             [int64]$a.Offset -ne [int64]$b.Offset -or
             [int64]$a.Size -ne [int64]$b.Size -or
-            [string]$a.GptType -ne [string]$b.GptType) {
+            [string]$a.GptType -ne [string]$b.GptType -or
+            [string]$a.MbrType -ne [string]$b.MbrType -or
+            [bool]$a.IsActive -ne [bool]$b.IsActive) {
             throw $m.CSExecLayoutChanged
         }
     }
@@ -606,7 +608,9 @@ function Assert-CSAfterCResize($disk, $c, $oldRecovery, $targetBytes, $snapshot)
         if ([int]$a.PartitionNumber -ne [int]$b.PartitionNumber -or
             [int64]$a.Offset -ne [int64]$b.Offset -or
             [int64]$a.Size -ne $expectedSize -or
-            [string]$a.GptType -ne [string]$b.GptType) { throw $m.CSExecLayoutChanged }
+            [string]$a.GptType -ne [string]$b.GptType -or
+            [string]$a.MbrType -ne [string]$b.MbrType -or
+            [bool]$a.IsActive -ne [bool]$b.IsActive) { throw $m.CSExecLayoutChanged }
     }
     if ($null -ne $oldRecovery) {
         $rec = Get-Partition -DiskNumber ([int]$disk.Number) `
@@ -853,6 +857,27 @@ function Invoke-CSResizeWithDiskPartFallback($disk, $c, $snapshot, $oldRecovery,
 }
 
 function Set-CSRecoveryType($disk, $partNumber) {
+    $style = [string]$disk.PartitionStyle
+    if ($style -eq 'MBR') {
+        # Documented BIOS/MBR WinRE partition type (0x27).
+        # Never change the system/active partition to Recovery.
+        $before = Get-Partition -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$partNumber) -ErrorAction Stop
+        if ($before.IsBoot -or $before.IsSystem -or $before.IsActive -or
+            [string]$before.Type -notin @('IFS','Basic')) {
+            throw $m.CSExecRecoveryTypeFailed
+        }
+        Invoke-CSDiskPart @("select disk $($disk.Number)","select partition $partNumber",
+            'set id=27 override')
+        $p = Get-Partition -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$partNumber) -ErrorAction Stop
+        if (-not (Test-RecoveryPartition $p 'MBR') -or
+            $p.IsBoot -or $p.IsSystem -or $p.IsActive) {
+            throw $m.CSExecRecoveryTypeFailed
+        }
+        return
+    }
+    if ($style -ne 'GPT') { throw $m.CSExecRecoveryTypeFailed }
     $guid = $script:RecoveryGuid
     Invoke-CSDiskPart @("select disk $($disk.Number)","select partition $partNumber",
         "set id=$guid override",'gpt attributes=0x8000000000000001')
@@ -896,6 +921,8 @@ function Invoke-CSCRecoveryExecution {
             PartitionNumber = [int]$_.PartitionNumber
             Offset = [int64]$_.Offset; Size = [int64]$_.Size
             GptType = [string]$_.GptType
+            MbrType = [string]$_.MbrType
+            IsActive = [bool]$_.IsActive
         }
     })
     try {
@@ -1185,15 +1212,35 @@ function Invoke-CSCRecoveryExecution {
 # registered-Recovery rebuild. Existing partitions are never deleted here.
 function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal, $geo) {
     Assert-CSBasicDisk $disk $parts
-    if ([string]$disk.PartitionStyle -ne 'GPT') { throw $m.CSExecGptOnly }
+    $style = [string]$disk.PartitionStyle
+    if ($style -notin @('GPT','MBR')) { throw $m.CSExecLayoutUnsupported }
     if ($disk.IsOffline -or $disk.IsReadOnly -or -not $disk.IsBoot) { throw $m.CSExecDiskUnsafe }
     if ($disk.PSObject.Properties['IsClustered'] -and $disk.IsClustered) { throw $m.CSExecDiskUnsafe }
-    if ((Get-GptId $c) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') {
-        throw $m.CSExecLayoutUnsupported
+    if ($style -eq 'GPT') {
+        if ((Get-GptId $c) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') {
+            throw $m.CSExecLayoutUnsupported
+        }
+        if ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber -or
+            $null -ne $reInfo.PartitionNumber) { throw $m.CSNewWinREStateChanged }
+    } else {
+        # MBR migration is supported ONLY from the running, registered WinRE
+        # on this exact C: partition. Never touch unrelated active volumes.
+        if (-not $proposal.MigratingWinREOnC -or -not $reInfo.Enabled -or
+            $null -eq $reInfo.DiskNumber -or $null -eq $reInfo.PartitionNumber -or
+            [int]$reInfo.DiskNumber -ne [int]$disk.Number -or
+            [int]$reInfo.PartitionNumber -ne [int]$c.PartitionNumber -or
+            [string]$c.Type -ne 'IFS' -or $parts.Count -ge 4 -or
+            [int64]$disk.Size -ge 2TB) { throw $m.CSMBRMigrationBlocked }
+        foreach ($part in $parts) {
+            if ([string]$part.Type -match '(?i)Extended|Logical|Unknown|Reserved|OEM') {
+                throw $m.CSMBRMigrationBlocked
+            }
+        }
+        $originalImage = Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE\Winre.wim'
+        if ([string]$proposal.ImageSourcePath -ine $originalImage -or
+            -not [IO.File]::Exists($originalImage)) { throw $m.CSMBRUnsafeSource }
     }
-    if ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber -or
-        $null -ne $reInfo.PartitionNumber) { throw $m.CSNewWinREStateChanged }
-    if (@($parts | Where-Object { Test-RecoveryPartition $_ 'GPT' }).Count -gt 0) {
+    if (@($parts | Where-Object { Test-RecoveryPartition $_ $style }).Count -gt 0) {
         throw $m.CSNewExistingRecovery
     }
     $currentC = Get-Partition -DriveLetter C -ErrorAction Stop
@@ -1255,10 +1302,11 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
     }
 }
 
-function Save-CSLocalWinREImage {
-    # The ISO image is prepared and verified during planning, so it is already
-    # on C: before any shrink, and stays available until the operation ends.
-    $source = if ($script:CSISOImagePath) { $script:CSISOImagePath }
+function Save-CSLocalWinREImage([string]$SourcePath, [bool]$MigratingOnC = $false) {
+    # Image source was verified during planning, and is staged before any
+    # resize or WinRE registration changes. Keep the original on C: untouched.
+    $source = if ($SourcePath) { $SourcePath }
+              elseif ($script:CSISOImagePath) { $script:CSISOImagePath }
               else { Join-Path $env:windir 'System32\Recovery\Winre.wim' }
     Write-Host $m.CSNewStagingLocal -ForegroundColor Cyan
     Assert-CSWim $source
@@ -1275,6 +1323,24 @@ function Save-CSLocalWinREImage {
     Assert-CSWim $dest
     if ((Get-CSFileSha256 $source) -ne (Get-CSFileSha256 $dest)) {
         throw $m.CSExecHashMismatch
+    }
+    if ($MigratingOnC) {
+        # Keep validated custom recovery assets as well as the WIM. Old
+        # ReAgent.xml is intentionally NOT copied: reagentc must regenerate it.
+        $extraDir = Join-Path $script:CSExecStaging 'RecoveryFiles'
+        foreach ($name in @('boot.sdi','ReAgent.xml','ReAgent.old',
+            'SrSettings.ini','WifiSettings.ini','ReCustomization.xml')) {
+            $original = Join-Path (Split-Path -Parent $source) $name
+            if (-not [IO.File]::Exists($original)) { continue }
+            if (-not [IO.Directory]::Exists($extraDir)) {
+                [void](New-Item -Path $extraDir -ItemType Directory -ErrorAction Stop)
+            }
+            $saved = Join-Path $extraDir $name
+            Copy-Item -LiteralPath $original -Destination $saved -ErrorAction Stop
+            if ((Get-CSFileSha256 $original) -ne (Get-CSFileSha256 $saved)) {
+                throw $m.CSExecHashMismatch
+            }
+        }
     }
     Write-Host ($m.CSExecStagedAt -f $dest) -ForegroundColor DarkGray
     return $dest
@@ -1310,16 +1376,22 @@ function Invoke-CSCreateMissingRecovery {
             PartitionNumber = [int]$_.PartitionNumber
             Offset = [int64]$_.Offset; Size = [int64]$_.Size
             GptType = [string]$_.GptType
+            MbrType = [string]$_.MbrType
+            IsActive = [bool]$_.IsActive
         }
     })
     try {
         Write-Host ''
         Write-Host ('=== ' + $m.CSExecPreflightTitle + ' ===') -ForegroundColor Cyan
         Write-Host $m.CSNewPreflight -ForegroundColor Yellow
+        if ([string]$Disk.PartitionStyle -eq 'MBR') {
+            Write-Host $m.CSMBRMigrationNotice -ForegroundColor Yellow
+        }
         Import-Module Dism -ErrorAction Stop
         Assert-CSMissingRecoveryPreflight $Disk $C $Parts $ReInfo $Proposal $RebuildGeometry
         Assert-CSLayoutUnchanged $Disk $snapshot
-        $stageWim = Save-CSLocalWinREImage
+        $stageWim = Save-CSLocalWinREImage -SourcePath ([string]$Proposal.ImageSourcePath) `
+            -MigratingOnC:([bool]$Proposal.MigratingWinREOnC)
         $stageHash = Get-CSFileSha256 $stageWim
         # Staging changes the file layout on C:; check shrinkability again.
         Assert-CSMissingRecoveryPreflight $Disk $C $Parts (Get-WinReSnapshot) $Proposal $RebuildGeometry
@@ -1344,6 +1416,15 @@ function Invoke-CSCreateMissingRecovery {
         Assert-CSMissingRecoveryPreflight $Disk $C $Parts (Get-WinReSnapshot) $Proposal $RebuildGeometry
         if (-not (Test-CSWindowsFilesystemBeforeResize $Disk $C $snapshot)) { return }
         Write-Host ('=== ' + $m.CSNewApplyingTitle + ' ===') -ForegroundColor Cyan
+        if ($Proposal.MigratingWinREOnC) {
+            # The source image was copied and hashed BEFORE disabling the
+            # registered WinRE on C:. Keep that original image and staging.
+            Assert-CSLayoutUnchanged $Disk $snapshot
+            Write-Host $m.CSMBRDisableBeforeMove
+            $script:CSExecMutated = $true
+            Invoke-CSExternal 'reagentc.exe' @('/disable')
+            if ((Get-WinReSnapshot).Enabled) { throw $m.CSExecWinRENotDisabled }
+        }
         if ([int64]$Proposal.ChangeBytes -lt 0) {
             Write-Host $m.CSExecShrinkC
             $script:CSExecMutated = $true
@@ -1415,10 +1496,16 @@ function Invoke-CSCreateMissingRecovery {
         Write-Host $m.CSExecCreateRecovery
         $script:CSExecMutated = $true
         $basic = '{EBD0A0A2-B9E5-4433-87C0-68B6B72699C7}'
+        $isMbr = ([string]$Disk.PartitionStyle -eq 'MBR')
         $created = $null
         try {
-            $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
-                -Size ([uint64]$RebuildGeometry.NewSize) -GptType $basic -ErrorAction Stop
+            if ($isMbr) {
+                $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
+                    -Size ([uint64]$RebuildGeometry.NewSize) -MbrType IFS -ErrorAction Stop
+            } else {
+                $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
+                    -Size ([uint64]$RebuildGeometry.NewSize) -GptType $basic -ErrorAction Stop
+            }
         } catch {
             $partial = @(Get-Partition -DiskNumber ([int]$Disk.Number) -ErrorAction Stop |
                 Where-Object { [int64]$_.Offset -eq $newStart })
@@ -1426,8 +1513,13 @@ function Invoke-CSCreateMissingRecovery {
             if ($fallbackSize -lt $required -or
                 $fallbackSize -ge [int64]$RebuildGeometry.NewSize) { throw }
             Write-Host $m.CSExecCreateFallback -ForegroundColor Yellow
-            $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
-                -Size ([uint64]$fallbackSize) -GptType $basic -ErrorAction Stop
+            if ($isMbr) {
+                $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
+                    -Size ([uint64]$fallbackSize) -MbrType IFS -ErrorAction Stop
+            } else {
+                $created = New-Partition -DiskNumber ([int]$Disk.Number) -Offset ([uint64]$newStart) `
+                    -Size ([uint64]$fallbackSize) -GptType $basic -ErrorAction Stop
+            }
         }
         $newNumber = [int]$created.PartitionNumber
         $newP = Get-Partition -DiskNumber ([int]$Disk.Number) `
@@ -1435,14 +1527,17 @@ function Invoke-CSCreateMissingRecovery {
         if ([int64]$newP.Offset -ne [int64]$newStart -or
             [int64]$newP.Size -lt $required -or
             [int64]$newP.Size -gt [int64]$RebuildGeometry.NewSize -or
-            $newP.DriveLetter -or $newP.IsSystem -or $newP.IsBoot -or
-            (Get-GptId $newP) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') {
+            $newP.DriveLetter -or $newP.IsSystem -or $newP.IsBoot -or $newP.IsActive -or
+            ($isMbr -and [string]$newP.Type -ne 'IFS') -or
+            (-not $isMbr -and (Get-GptId $newP) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7')) {
             throw $m.CSExecNewRecoveryMismatch
         }
         Assert-CSOtherPartitionsPreserved $Disk $Parts $C
         Format-Volume -Partition $newP -FileSystem NTFS -NewFileSystemLabel 'Windows RE tools' `
             -Force -Confirm:$false -ErrorAction Stop | Out-Null
-        Set-CSRecoveryType $Disk $newNumber
+        # BIOS/MBR: configure the temporary NTFS partition before assigning
+        # the protected 0x27 type, following Microsoft's deployment sequence.
+        if (-not $isMbr) { Set-CSRecoveryType $Disk $newNumber }
         $root = Open-CSRecoveryMount ([int]$Disk.Number) $newNumber
         try {
             $folder = Join-Path $root 'Recovery\WindowsRE'
@@ -1450,6 +1545,20 @@ function Invoke-CSCreateMissingRecovery {
             $dest = Join-Path $folder 'Winre.wim'
             Copy-Item -LiteralPath $stageWim -Destination $dest -Force -ErrorAction Stop
             if ((Get-CSFileSha256 $dest) -ne $stageHash) { throw $m.CSExecHashMismatch }
+            if ($isMbr) {
+                $extraDir = Join-Path $script:CSExecStaging 'RecoveryFiles'
+                if ([IO.Directory]::Exists($extraDir)) {
+                    foreach ($saved in @(Get-ChildItem -LiteralPath $extraDir -File -Force -ErrorAction Stop)) {
+                        if ($saved.Name -notin @('boot.sdi','SrSettings.ini',
+                            'WifiSettings.ini','ReCustomization.xml')) { throw $m.CSMBRUnsafeSource }
+                        $newFile = Join-Path $folder $saved.Name
+                        Copy-Item -LiteralPath $saved.FullName -Destination $newFile -ErrorAction Stop
+                        if ((Get-CSFileSha256 $newFile) -ne (Get-CSFileSha256 $saved.FullName)) {
+                            throw $m.CSExecHashMismatch
+                        }
+                    }
+                }
+            }
             $reVol = Get-Volume -Partition $newP -ErrorAction Stop
             if ([int64]$reVol.SizeRemaining -lt 250MB) { throw $m.CSExecRecoveryTooSmall }
             Write-Host ($m.CSExecSetReimage -f $folder)
@@ -1465,6 +1574,11 @@ function Invoke-CSCreateMissingRecovery {
         } finally {
             Close-CSRecoveryMount ([int]$Disk.Number)
         }
+        if ($isMbr) {
+            # Now hide and protect the new Recovery with MBR ID 0x27;
+            # never change the original C: partition's active flag or type.
+            Set-CSRecoveryType $Disk $newNumber
+        }
         $verified = Get-WinReSnapshot
         if (-not $verified.Enabled -or
             [int]$verified.DiskNumber -ne [int]$Disk.Number -or
@@ -1473,11 +1587,14 @@ function Invoke-CSCreateMissingRecovery {
         }
         $finalP = Get-Partition -DiskNumber ([int]$Disk.Number) `
             -PartitionNumber $newNumber -ErrorAction Stop
-        if (-not (Test-RecoveryPartition $finalP 'GPT')) { throw $m.CSExecRecoveryTypeFailed }
+        if (-not (Test-RecoveryPartition $finalP ([string]$Disk.PartitionStyle))) {
+            throw $m.CSExecRecoveryTypeFailed
+        }
         Assert-CSOtherPartitionsPreserved $Disk $Parts $C
         $completed = $true
         $script:CSExecLastSucceeded = $true
         Write-Host $m.CSNewComplete -ForegroundColor Green
+        if ($isMbr) { Write-Host $m.CSMBRSourceKept -ForegroundColor DarkGray }
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red

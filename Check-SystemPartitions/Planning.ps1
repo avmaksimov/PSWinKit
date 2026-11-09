@@ -15,7 +15,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
     $out = [ordered]@{
         Found = $false; Verified = $false; Source = ''; WIMBytes = [int64]0
         ExtraBytes = [int64]0; Existing = $null; UsedBytes = $null
-        FreeBytes = $null; MinRecoveryBytes = $null; Error = ''
+        FreeBytes = $null; MinRecoveryBytes = $null; ImagePath = ''; Error = ''
     }
     $candidate = $activeRecovery
     if ($null -eq $candidate) {
@@ -64,6 +64,33 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
                 # A registered Recovery with unexpected content must not be
                 # bypassed by using a different image source for a rebuild.
                 if ($null -ne $activeRecovery) { throw }
+            }
+        }
+        # Supported MBR migration: reagentc /info identifies the Windows C:
+        # partition itself. Use the registered image on C:, NOT an ISO, and
+        # do not disable or delete the original WinRE during planning.
+        if ($null -eq $path -and [string]$disk.PartitionStyle -eq 'MBR' -and
+            $reInfo.Enabled -and $null -ne $reInfo.DiskNumber -and
+            $null -ne $reInfo.PartitionNumber -and
+            [int]$reInfo.DiskNumber -eq [int]$disk.Number -and
+            [int]$reInfo.PartitionNumber -eq [int]$c.PartitionNumber) {
+            $registeredFolder = Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE'
+            $registeredWim = Join-Path $registeredFolder 'Winre.wim'
+            if ([IO.File]::Exists($registeredWim)) {
+                $dirInfo = Get-Item -LiteralPath $registeredFolder -Force -ErrorAction Stop
+                if (($dirInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw $m.CSMBRUnsafeSource
+                }
+                foreach ($entry in @(Get-ChildItem -LiteralPath $registeredFolder -Force -ErrorAction Stop)) {
+                    if ($entry.PSIsContainer -or
+                        (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+                        $entry.Name -notin @('Winre.wim','boot.sdi','ReAgent.xml','ReAgent.old',
+                            'SrSettings.ini','WifiSettings.ini','ReCustomization.xml')) {
+                        throw $m.CSMBRUnsafeSource
+                    }
+                }
+                $path = $registeredWim
+                $out.Source = $m.CSMBRSourceOnC
             }
         }
         if ($null -eq $path) {
@@ -122,6 +149,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
                     $script:CSNewNtfsAllowance + $script:CSFreeReserve +
                     $script:CSFormatVariation)))
         }
+        $out.ImagePath = [string]$path
         $out.Found = $true
         $out.Verified = $true
         return [pscustomobject]$out
@@ -187,13 +215,19 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         [int64]$volume.Size -le 0 -or $null -eq $assessment.MinRecoveryBytes) {
         return $null
     }
-    if ([string]$disk.PartitionStyle -ne 'GPT') { return $null }
-    # Do not create a second Recovery if an unregistered/other Recovery exists.
+    $style = [string]$disk.PartitionStyle
+    $mbrOnC = ($style -eq 'MBR' -and $reInfo.Enabled -and
+        $null -ne $reInfo.DiskNumber -and $null -ne $reInfo.PartitionNumber -and
+        [int]$reInfo.DiskNumber -eq [int]$disk.Number -and
+        [int]$reInfo.PartitionNumber -eq [int]$c.PartitionNumber -and
+        [string]$assessment.ImagePath -ieq (Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE\Winre.wim'))
+    if ($style -ne 'GPT' -and -not $mbrOnC) { return $null }
     if ($null -eq $activeRecovery) {
-        if ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber -or
-            @($parts | Where-Object { Test-RecoveryPartition $_ 'GPT' }).Count -gt 0) {
-            return $null
-        }
+        if (@($parts | Where-Object { Test-RecoveryPartition $_ $style }).Count -gt 0) { return $null }
+        if (-not $mbrOnC -and ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber)) { return $null }
+        if ($mbrOnC -and (@($parts | Where-Object {
+            [string]$_.Type -match '(?i)Extended|Logical|Unknown|Reserved|OEM'
+        }).Count -gt 0 -or $parts.Count -ge 4)) { return $null }
     }
     $originalCSize = [int64]$c.Size
     $minRecovery = [int64]$assessment.MinRecoveryBytes
@@ -217,14 +251,14 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $baseC = $originalCSize
     if ($mustRepair) {
         if ($null -eq $activeRecovery) {
-            # Use an existing adjacent gap first. If it already fits the
-            # planned Recovery plus the 512 MiB growth allowance, return the
-            # surplus to C:. If the gap fits only the minimum, keep C: as-is.
-            # If it is too small even for the minimum, shrink C: enough to
-            # make the desired Recovery, without adding any external margin.
+            # Existing free space is never automatically returned to C:.
+            # Preserve the current C: size and present an OPTIONAL numeric
+            # allocation choice to the user after they select creating Recovery.
+            # Only shrink C: when the adjacent space is too small even for
+            # the calculated Recovery minimum.
             $existingGap = [int64][math]::Max(0,
                 $rightEnd - (Align-UpMiB (Get-PartitionEnd $c)))
-            if ($existingGap -ge $maxNewSize -or $existingGap -lt $minRecovery) {
+            if ($existingGap -lt $minRecovery) {
                 $targetEnd = Align-DownMiB ([int64]($rightEnd - $maxNewSize))
                 $baseC = [int64]($targetEnd - [int64]$c.Offset)
                 if ($baseC -le 0) { return $null }
@@ -283,6 +317,8 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         Beauty = [bool]$beauty
         MustRepair = [bool]$mustRepair
         MinimumRecoveryBytes = $minRecovery
+        ImageSourcePath = [string]$assessment.ImagePath
+        MigratingWinREOnC = [bool]$mbrOnC
         Geometry = $geo
     }
 }

@@ -479,6 +479,21 @@ function Read-YesNo([string]$prompt) {
 }
 
 
+# Explicit MiB allocation choice for new Recovery (never implicit expansion).
+function Read-CSRecoveryCExtraMiB([int64]$maximum) {
+    while ($true) {
+        $inputText = (Read-Host ($m.CSNewCExtraPrompt -f $maximum)).Trim()
+        if ($inputText -eq '') { return [int64]0 }
+        $chosen = [int64]0
+        if ([int64]::TryParse($inputText, [System.Globalization.NumberStyles]::None,
+                [System.Globalization.CultureInfo]::InvariantCulture, [ref]$chosen) -and
+            $chosen -ge 0 -and $chosen -le $maximum) {
+            return $chosen
+        }
+        Write-Host ($m.CSNewCExtraInvalid -f $maximum) -ForegroundColor Yellow
+    }
+}
+
 # Read back actual state after successful steps and any optional deletions.
 # Do not infer success from old partition numbers: Windows may renumber on reboot.
 function Show-CSFinalSummary {
@@ -543,9 +558,8 @@ try {
     Assert-CSBasicDisk $disk $parts
     $usableBounds = Get-UsableDiskBounds $disk $parts
     $reInfo = Get-WinReSnapshot
-    # Offer cleanup of abandoned, old protected staging folders at EVERY launch.
-    # Never remove them without an explicit Y; cleanup is separate from disk work.
-    Invoke-CSOfferOldStagingCleanup -WinReEnabled:([bool]$reInfo.Enabled)
+    # Defer any interactive cleanup prompts until after the non-interactive
+    # early pending-CHKDSK guard, so a reboot notice always takes priority.
     $volumeSizes = Get-VolumeSizeMap $parts
     $rows = @(New-PartitionRows $disk $c $parts $reInfo $usableBounds $volumeSizes)
     $activeRecovery = Get-ActiveRecovery $parts $reInfo ([int]$disk.Number) ([string]$disk.PartitionStyle)
@@ -565,6 +579,16 @@ try {
         } else { $reSuffix = $m.CSReUnknown }
     }
     Write-Host ($m.CSInfoRe -f $reText, $reSuffix)
+
+    # Read-only boot check BEFORE any ISO/edition or cleanup prompt.
+    if (Test-CSPendingBootCheckC) {
+        Write-Host ''
+        Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
+        $script:CSRunHandled = $true
+        return
+    }
+    # Cleanup is separately confirmed; do not offer it while a reboot is pending.
+    Invoke-CSOfferOldStagingCleanup -WinReEnabled:([bool]$reInfo.Enabled)
 
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
@@ -601,7 +625,9 @@ try {
                 $recoveryPartitions = @($parts | Where-Object {
                     Test-RecoveryPartition $_ ([string]$disk.PartitionStyle)
                 })
-                if (-not $reInfo.Enabled -and $recoveryPartitions.Count -eq 0) {
+                if ($proposal.MigratingWinREOnC) {
+                    $cRow[0].Recommendation = $m.CSMBRRecommendMoveWinRE
+                } elseif (-not $reInfo.Enabled -and $recoveryPartitions.Count -eq 0) {
                     $cRow[0].Recommendation = $m.CS26RecommendationCreateMissing
                 } else {
                     $cRow[0].Recommendation = $m.CS26RecommendationRepair
@@ -612,16 +638,6 @@ try {
     Show-Partitions $rows
     if ($null -eq $usableBounds) {
         Write-Host $m.CSGptBoundsUnavailable -ForegroundColor Yellow
-    }
-
-    # Inform and exit before planning if Windows has already scheduled a
-    # C: filesystem check for startup. Reading BootExecute is non-destructive;
-    # the NTFS scan itself is performed only after final confirmation.
-    if (Test-CSPendingBootCheckC) {
-        Write-Host ''
-        Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
-        $script:CSRunHandled = $true
-        return
     }
 
     Write-Host ''
@@ -657,7 +673,35 @@ try {
         # preflight checks and obtains separate final confirmation.
         if ($canPreviewC) {
             if ($null -eq $activeRecovery) {
-                $optimiseC = Read-YesNo $m.CSAskCreateRecovery
+                $optimiseC = if ($proposal.MigratingWinREOnC) {
+                    Read-YesNo $m.CSMBRAskMove
+                } else { Read-YesNo $m.CSAskCreateRecovery }
+                if ($optimiseC) {
+                    # Only the surplus beyond the planned Recovery size can
+                    # be assigned to C:. Leave C: unchanged by default.
+                    $reSize = [int64]$proposal.Geometry.NewSize
+                    $maxGrowBytes = [int64][math]::Max(0,
+                        (Align-DownMiB ([int64]$proposal.Geometry.RightEnd - $reSize)) -
+                        ([int64]$c.Offset + [int64]$proposal.TargetPartitionBytes))
+                    $maxGrowMiB = [int64][math]::Floor($maxGrowBytes / [double]$script:MiB)
+                    if ($maxGrowMiB -gt 0 -and [int64]$proposal.ChangeBytes -ge 0) {
+                        $growMiB = Read-CSRecoveryCExtraMiB $maxGrowMiB
+                        if ($growMiB -gt 0) {
+                            $targetC = [int64]($proposal.TargetPartitionBytes + $growMiB * $script:MiB)
+                            $newGeo = Get-CSProposedGeometry $disk $c $parts $null $targetC `
+                                $usableBounds $reSize
+                            if ($null -eq $newGeo -or -not $newGeo.IsGeometryPossible -or
+                                [int64]$newGeo.NewSize -ne $reSize -or
+                                [int64]$newGeo.RightEnd -ne [int64]$proposal.Geometry.RightEnd) {
+                                throw $m.CSExecLayoutUnsupported
+                            }
+                            $proposal.TargetPartitionBytes = $targetC
+                            $proposal.ChangeBytes = [int64]($targetC - [int64]$c.Size)
+                            $proposal.Geometry = $newGeo
+                            $geometryCandidate = $newGeo
+                        }
+                    }
+                }
             } elseif ($proposal.Beauty) {
                 $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f
                     $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
@@ -708,6 +752,9 @@ try {
         if ($null -eq $activeRecovery) {
             Write-Host ($m.CS26PlanCreate -f (Format-DetailedSize ([int64]$rebuildGeometry.NewSize)),
                 (Format-DetailedSize ([int64]$proposal.MinimumRecoveryBytes)))
+            if ($proposal.MigratingWinREOnC) {
+                Write-Host $m.CSMBRPlanMigration
+            }
             if ($proposal.ChangeBytes -ne 0) {
                 Write-Host ($m.CS26PlanCChange -f $operation, $changeLabel)
             }
@@ -781,8 +828,10 @@ try {
             $newRecovery = [pscustomobject]@{
                 PartitionNumber = 0; Offset = [int64]$rebuildGeometry.NewStart
                 Size = [int64]$rebuildGeometry.NewSize; DriveLetter = $null
-                Type = 'Recovery'; GptType = ('{' + $script:RecoveryGuid + '}')
-                MbrType = ''; IsBoot = $false; IsSystem = $false; IsActive = $false
+                Type = 'Recovery'
+                GptType = if ([string]$disk.PartitionStyle -eq 'GPT') { '{' + $script:RecoveryGuid + '}' } else { '' }
+                MbrType = if ([string]$disk.PartitionStyle -eq 'MBR') { 'Recovery' } else { '' }
+                IsBoot = $false; IsSystem = $false; IsActive = $false
             }
             $projectedParts = @($projectedParts + @($newRecovery) | Sort-Object Offset)
         }
