@@ -613,6 +613,17 @@ try {
     if ($null -eq $usableBounds) {
         Write-Host $m.CSGptBoundsUnavailable -ForegroundColor Yellow
     }
+
+    # Inform and exit before planning if Windows has already scheduled a
+    # C: filesystem check for startup. Reading BootExecute is non-destructive;
+    # the NTFS scan itself is performed only after final confirmation.
+    if (Test-CSPendingBootCheckC) {
+        Write-Host ''
+        Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
+        $script:CSRunHandled = $true
+        return
+    }
+
     Write-Host ''
     Write-Host $m.CS27ReadOnlyUntilConfirm -ForegroundColor Yellow
     if ($null -eq $vol) { Write-Host $m.CSPlanNoCapacity -ForegroundColor Yellow }
