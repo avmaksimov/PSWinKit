@@ -257,6 +257,7 @@ try {
     }
     if (Test-Path -LiteralPath $manifestStage) { throw ($m.StageExists -f $manifestStage) }
     $metadataOnly = $changes.Count -eq 0 -and $removals.Count -eq 0
+    Write-Host ''
     if ($metadataOnly -and -not $manifestChanged) {
         Write-Host $m.UpToDate -ForegroundColor Green
         return
@@ -266,13 +267,13 @@ try {
         $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
         $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
         $unchangedCount = $entries.Count - $changes.Count
-        Write-Host $m.StateLegend -ForegroundColor DarkGray
-        Write-Host ''
         Write-Host $m.SummaryTitle -ForegroundColor Cyan
         Write-Host ($m.Destination -f $target) -ForegroundColor Gray
         Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
         Write-Host ''
         Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
+        Write-Host ''
+        Write-Host $m.StateLegend -ForegroundColor DarkGray
         Write-Host ''
         foreach ($item in @($entries) + @($removals)) {
             $stateColor = switch ($item.State) {

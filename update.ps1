@@ -103,7 +103,6 @@ try {
         }
     }
     $installerStarted = $true
-    Write-Host ''
     & (Join-Path $sourceRoot 'install.ps1') -Commit $metadataSha
 }
 catch {
