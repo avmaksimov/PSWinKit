@@ -778,7 +778,11 @@ try {
             Write-Host ($m.CSPlanAbsorbGap -f (Format-FreeSpaceSize ([int64]$rebuildGeometry.AbsorbedGapBytes))) -ForegroundColor DarkGray
         }
         if ($null -eq $activeRecovery) {
-            Write-Host $m.CSNewCreateOrder -ForegroundColor DarkGray
+            # Do not describe resizing C: when creating Recovery from free space
+            # with the user-selected default of zero additional MiB.
+            if ([int64]$proposal.ChangeBytes -ne 0) {
+                Write-Host $m.CSNewCreateOrder -ForegroundColor DarkGray
+            }
         } elseif ($proposal.ChangeBytes -gt 0) {
             Write-Host $m.CSPlanOrderGrow
         } else {

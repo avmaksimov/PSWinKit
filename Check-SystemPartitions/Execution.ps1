@@ -651,15 +651,16 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
         [int]$liveC.PartitionNumber -ne [int]$c.PartitionNumber -or
         [int64]$liveC.Offset -ne [int64]$c.Offset -or
         [int64]$liveC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
-    $vol = Get-Volume -DriveLetter C -ErrorAction Stop
-    if ([string]$vol.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
-
     # An existing CHKDSK request takes priority over any partition operation.
-    # Do NOT inspect BootExecute during planning or before final confirmation.
+    # This is rechecked after final confirmation; the first read-only check
+    # already happened before image assessment and interactive prompts.
     if (Test-CSPendingBootCheckC) {
         Write-Host $m.CSFsAlreadyScheduled -ForegroundColor Yellow
         return $false
     }
+
+    $vol = Get-Volume -DriveLetter C -ErrorAction Stop
+    if ([string]$vol.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
 
     $scanProblem = $null
     $scanStatus = ''
@@ -1549,6 +1550,9 @@ function Invoke-CSCreateMissingRecovery {
                 $extraDir = Join-Path $script:CSExecStaging 'RecoveryFiles'
                 if ([IO.Directory]::Exists($extraDir)) {
                     foreach ($saved in @(Get-ChildItem -LiteralPath $extraDir -File -Force -ErrorAction Stop)) {
+                        # Keep the original ReAgent configuration in staging only.
+                        # reagentc must create registration for the new partition.
+                        if ($saved.Name -in @('ReAgent.xml','ReAgent.old')) { continue }
                         if ($saved.Name -notin @('boot.sdi','SrSettings.ini',
                             'WifiSettings.ini','ReCustomization.xml')) { throw $m.CSMBRUnsafeSource }
                         $newFile = Join-Path $folder $saved.Name
