@@ -48,64 +48,39 @@ function Get-CSStagingTreeSize([string]$path) {
     return $bytes
 }
 
-function Invoke-CSOfferOldStagingCleanup([switch]$WinReEnabled) {
+function Invoke-CSCleanupStaging {
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
     if (-not [IO.Directory]::Exists($base)) { return }
-    # The root must itself be an ordinary directory (not a junction).
+    # Do not traverse or delete through junctions / symbolic links.
     if (((Get-Item -LiteralPath $base -Force -ErrorAction Stop).Attributes -band
         [IO.FileAttributes]::ReparsePoint) -ne 0) { throw $m.CS27CleanupUnsafeRoot }
     $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
-        Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' -and
-            $_.LastWriteTime -lt (Get-Date).AddMinutes(-30) })
+        Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' })
     if ($dirs.Count -eq 0) { return }
-    # Display a concise table and show the common location only once.
-    $tableRows = @(
-        foreach ($dir in $dirs) {
-            if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
-                Write-Host ($m.CS27OldStageUnsafe -f $dir.FullName) -ForegroundColor Red
-                return
-            }
-            [pscustomobject]@{
-                Folder = $dir.Name
-                Created = $dir.CreationTime.ToString('G')
-                Size = (Format-PartitionSize (Get-CSStagingTreeSize $dir.FullName))
-            }
-        }
-    )
-    if ($tableRows.Count -ne $dirs.Count) { return }
-    Write-Host ''
-    Write-Host $m.CS27OldStageTitle -ForegroundColor Cyan
-    Write-Host ($m.CSOldStageLocation -f $base)
-    # Fixed column alignment avoids Format-Table squeezing long Stage-* names
-    # together with the date, especially with localized date/number strings.
-    $folderWidth = ([string]$m.CSOldStageColumnFolder).Length
-    $dateWidth = ([string]$m.CSOldStageColumnCreated).Length
-    $sizeWidth = ([string]$m.CSOldStageColumnSize).Length
-    foreach ($row in $tableRows) {
-        $folderWidth = [math]::Max($folderWidth, $row.Folder.Length)
-        $dateWidth = [math]::Max($dateWidth, $row.Created.Length)
-        $sizeWidth = [math]::Max($sizeWidth, $row.Size.Length)
-    }
-    $header = '{0,-' + $folderWidth + '}  {1,-' + $dateWidth + '}  {2,' + $sizeWidth + '}'
-    Write-Host ($header -f $m.CSOldStageColumnFolder, $m.CSOldStageColumnCreated, $m.CSOldStageColumnSize)
-    Write-Host ($header -f ('-' * $folderWidth), ('-' * $dateWidth), ('-' * $sizeWidth))
-    foreach ($row in $tableRows) {
-        Write-Host ($header -f $row.Folder, $row.Created, $row.Size)
-    }
-    Write-Host ''
-    if (-not $WinReEnabled) {
-        Write-Host $m.CS27OldStageKeep -ForegroundColor Yellow
-        return
-    }
-    Write-Host $m.CS27OldStageWarning -ForegroundColor DarkGray
-    if (-not (Read-YesNo $m.CS27OldStageDeleteQuestion)) { return }
+    # Validate every candidate before deleting any of them.
     foreach ($dir in $dirs) {
         if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
-            throw $m.CS27CleanupUnsafeRoot
+            throw ($m.CS27OldStageUnsafe -f $dir.FullName)
         }
+    }
+    foreach ($dir in $dirs) {
         Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
     }
-    Write-Host ($m.CS27OldStageDeleted -f $dirs.Count) -ForegroundColor Green
+    Write-Host ($m.CS27OldStageDeleted -f $dirs.Count) -ForegroundColor DarkGray
+}
+
+function Show-CSPreservedStages {
+    $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
+    if (-not [IO.Directory]::Exists($base)) { return }
+    # Read only. Do not inspect a reparse-point directory.
+    $root = Get-Item -LiteralPath $base -Force -ErrorAction Stop
+    if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
+    $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
+        Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' })
+    if ($dirs.Count -eq 0) { return }
+    Write-Host ''
+    Write-Host ($m.CSStagePreserved -f $dirs.Count) -ForegroundColor Yellow
+    Write-Host ($m.CSOldStageLocation -f $base) -ForegroundColor DarkGray
 }
 
 function Assert-CSPendingRebootClear {
@@ -665,7 +640,8 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
     $scanProblem = $null
     $scanStatus = ''
     try {
-        $statuses = @(Repair-Volume -DriveLetter C -Scan -Confirm:$false -ErrorAction Stop)
+        $scanResult = Repair-Volume -DriveLetter C -Scan -Confirm:$false -ErrorAction Stop
+        $statuses = @($scanResult)
         if ($statuses.Count -ne 1 -or $null -eq $statuses[0]) {
             $scanProblem = $m.CSFsScanUnexpected -f ($statuses -join ', ')
         } else {
@@ -733,10 +709,10 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
     Write-Host ($m.CSFsScheduling -f $mode) -ForegroundColor Cyan
     try {
         if ($spotFixNeeded) {
-            $repairResult = @(Repair-Volume -DriveLetter C -SpotFix -Confirm:$false -ErrorAction Stop)
+            $repairResult = Repair-Volume -DriveLetter C -SpotFix -Confirm:$false -ErrorAction Stop
         } else {
-            $repairResult = @(Repair-Volume -DriveLetter C -OfflineScanAndFix `
-                -Confirm:$false -ErrorAction Stop)
+            $repairResult = Repair-Volume -DriveLetter C -OfflineScanAndFix `
+                -Confirm:$false -ErrorAction Stop
         }
     } catch {
         throw ($m.CSFsRepairCommandFailed -f $mode, $_.Exception.Message)
@@ -1196,16 +1172,8 @@ function Invoke-CSCRecoveryExecution {
             try { Close-CSRecoveryMount ([int]$Disk.Number) }
             catch { Write-Warning $m.CSExecMountRetained }
         }
-        $stageRemoved = $false
-        if ($completed -or -not $script:CSExecMutated) {
-            if ($script:CSExecStaging -and (Test-Path -LiteralPath $script:CSExecStaging -PathType Container)) {
-                try {
-                    Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop
-                    $stageRemoved = $true
-                } catch { Write-Warning ($m.CSTemporaryStageRemovalFailed -f $script:CSExecStaging, $_.Exception.Message) }
-            }
-        }
-        Show-CSTemporaryCleanupResult $stageRemoved
+        # Rescue images are removed only after the top-level final verification.
+        Show-CSTemporaryCleanupResult $false
     }
 }
 
@@ -1613,15 +1581,7 @@ function Invoke-CSCreateMissingRecovery {
             try { Close-CSRecoveryMount ([int]$Disk.Number) }
             catch { Write-Warning $m.CSExecMountRetained }
         }
-        $stageRemoved = $false
-        if ($completed -or -not $script:CSExecMutated) {
-            if ($script:CSExecStaging -and (Test-Path -LiteralPath $script:CSExecStaging -PathType Container)) {
-                try {
-                    Remove-Item -LiteralPath $script:CSExecStaging -Recurse -Force -ErrorAction Stop
-                    $stageRemoved = $true
-                } catch { Write-Warning ($m.CSTemporaryStageRemovalFailed -f $script:CSExecStaging, $_.Exception.Message) }
-            }
-        }
-        Show-CSTemporaryCleanupResult $stageRemoved
+        # Rescue images are removed only after the top-level final verification.
+        Show-CSTemporaryCleanupResult $false
     }
 }

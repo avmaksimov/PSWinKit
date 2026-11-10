@@ -939,6 +939,7 @@
         CS27OldStageUnsafe = 'Unsafe staging folder detected (possible junction or link); nothing will be deleted: {0}'
         CS27OldStageDeleteQuestion = 'Delete all listed previous staging folders?'
         CS27OldStageDeleted = 'Deleted previous staging folders: {0}.'
+        CSStagePreserved = '{0} PSWinKit recovery staging folder(s) were retained because this run did not finish with verified healthy Windows RE. They will be removed automatically after the next successful Check-SystemPartitions run.'
         CS27CleanupUnsafeRoot = 'Staging location is not a normal directory; cleanup was stopped.'
         CS27ExecuteExperimental = 'EXPERIMENTAL DISK EXECUTION: selected changes to C: and the Recovery partition, plus optional deletions, may modify the disk after confirmation.'
         CSSelectionNotice = 'Choose operations to include in the plan. These selections do not authorize disk changes; execution requires a separate final confirmation.'

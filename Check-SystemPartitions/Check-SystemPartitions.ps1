@@ -29,6 +29,7 @@ $script:GiB = [int64]1073741824
 # Do not treat GPT header and partition tables as free space.
 $script:KiB = [int64]1024
 $script:RecoveryGuid = 'DE94BBA4-06D1-4D40-A16A-BFD50179D6AC'
+$script:CSStagingCleanedSuccessfully = $false
 $script:EfiGuid = 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
 $script:MsrGuid = 'E3C9E316-0B5C-4DB8-817D-F92DF00215AE'
 function Format-PartitionSize([int64]$bytes) {
@@ -171,9 +172,12 @@ function Add-FreeRow($records, [int64]$start, [int64]$end) {
 function Get-GptId($part) { return ([string]$part.GptType).Trim('{}').ToUpperInvariant() }
 function Test-RecoveryPartition($part, [string]$style) {
     if ($style -eq 'GPT') { return ((Get-GptId $part) -eq $script:RecoveryGuid) }
-    $type = [string]$part.Type
-    $mbr = if ($part.PSObject.Properties['MbrType']) { [string]$part.MbrType } else { '' }
-    return ($type -match '^(Recovery|0x27)$' -or $mbr -match '^(Recovery|0x27)$')
+    if ($style -ne 'MBR' -or $null -eq $part -or
+        -not $part.PSObject.Properties['MbrType'] -or $null -eq $part.MbrType) {
+        return $false
+    }
+    # Windows Storage may report Type=Unknown while MbrType=39 (0x27).
+    return ([uint16]$part.MbrType -eq [uint16]0x27)
 }
 function Get-WinReSnapshot {
     # Run REAgentC directly. A UNC working directory is safe here and native
@@ -836,7 +840,7 @@ try {
                 Size = [int64]$rebuildGeometry.NewSize; DriveLetter = $null
                 Type = 'Recovery'
                 GptType = if ([string]$disk.PartitionStyle -eq 'GPT') { '{' + $script:RecoveryGuid + '}' } else { '' }
-                MbrType = if ([string]$disk.PartitionStyle -eq 'MBR') { 'Recovery' } else { '' }
+                MbrType = if ([string]$disk.PartitionStyle -eq 'MBR') { [uint16]0x27 } else { $null }
                 IsBoot = $false; IsSystem = $false; IsActive = $false
             }
             $projectedParts = @($projectedParts + @($newRecovery) | Sort-Object Offset)
@@ -925,10 +929,9 @@ try {
             }
         }
     }
-    # Offer removal of previous rescue stages ONLY at normal exit. Never
-    # offer it after execution failure, aborted disk changes, failed readback,
-    # or rejected optional-deletion audits. A no-change diagnostic run also
-    # qualifies if the source WIM was verified and WinRE is still enabled.
+    # Automatically remove all rescue stages, including this run's stage,
+    # only after final readback (or verified healthy no-change diagnostics).
+    # On failures and interruptions the files remain for manual recovery.
     $anySelectedAction = ($optimiseC -or $selectedAudits.Count -gt 0)
     $normalCompletion = ($selectedAudits.Count -eq $selected.Count -and
         $invalid.Count -eq 0 -and $assessment.Verified -and
@@ -939,7 +942,8 @@ try {
             if ($finalRE.Enabled -and $null -ne $finalRE.DiskNumber -and
                 $null -ne $finalRE.PartitionNumber -and
                 [int]$finalRE.DiskNumber -eq [int]$disk.Number) {
-                Invoke-CSOfferOldStagingCleanup -WinReEnabled
+                Invoke-CSCleanupStaging
+                $script:CSStagingCleanedSuccessfully = $true
             }
         } catch {
             if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
@@ -963,6 +967,10 @@ finally {
     # Ctrl+C may bypass catch, but normally still enters finally.
     if (-not $script:CSRunHandled) { $utility.InterruptedByUser = $true }
     try {
+        if (-not $script:CSStagingCleanedSuccessfully) {
+            try { Show-CSPreservedStages }
+            catch { Write-Warning $_.Exception.Message }
+        }
         # ISO staging may contain WinRE rescue material after a failed disk change.
         Clear-CSISOStage
     } finally {
