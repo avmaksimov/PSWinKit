@@ -53,20 +53,20 @@ function Invoke-CSCleanupStaging {
     if (-not [IO.Directory]::Exists($base)) { return }
     # Do not traverse or delete through junctions / symbolic links.
     if (((Get-Item -LiteralPath $base -Force -ErrorAction Stop).Attributes -band
-        [IO.FileAttributes]::ReparsePoint) -ne 0) { throw $m.CS27CleanupUnsafeRoot }
+        [IO.FileAttributes]::ReparsePoint) -ne 0) { throw $m.CSStageUnsafeRoot }
     $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
         Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' })
     if ($dirs.Count -eq 0) { return }
     # Validate every candidate before deleting any of them.
     foreach ($dir in $dirs) {
         if (-not (Test-CSStagingTreeSafe $dir.FullName)) {
-            throw ($m.CS27OldStageUnsafe -f $dir.FullName)
+            throw ($m.CSStageUnsafe -f $dir.FullName)
         }
     }
     foreach ($dir in $dirs) {
         Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
     }
-    Write-Host ($m.CS27OldStageDeleted -f $dirs.Count) -ForegroundColor DarkGray
+    Write-Host ($m.CSStageDeleted -f $dirs.Count) -ForegroundColor DarkGray
 }
 
 function Show-CSExistingStages {
@@ -77,7 +77,7 @@ function Show-CSExistingStages {
     }
     $root = Get-Item -LiteralPath $base -Force -ErrorAction Stop
     if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        Write-Warning $m.CS27CleanupUnsafeRoot
+        Write-Warning $m.CSStageUnsafeRoot
         return
     }
     $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
@@ -88,11 +88,11 @@ function Show-CSExistingStages {
         return
     }
     Write-Host ''
-    Write-Host ('=== ' + $m.CS27OldStageTitle + ' ===') -ForegroundColor Cyan
-    Write-Host ($m.CSOldStageLocation -f $base) -ForegroundColor DarkGray
+    Write-Host ('=== ' + $m.CSStageTitle + ' ===') -ForegroundColor Cyan
+    Write-Host ($m.CSStageLocation -f $base) -ForegroundColor DarkGray
     $entries = @(
         foreach ($dir in $dirs) {
-            $displaySize = $m.CS27OldStageSizeUnknown
+            $displaySize = $m.CSStageSizeUnknown
             if (Test-CSStagingTreeSafe $dir.FullName) {
                 try { $displaySize = Format-DetailedSize (Get-CSStagingTreeSize $dir.FullName) }
                 catch { }
@@ -104,16 +104,15 @@ function Show-CSExistingStages {
             }
         }
     )
-    $folderWidth = [math]::Max(38, [int]$m.CSOldStageColumnFolder.Length)
-    $dateWidth = [math]::Max(19, [int]$m.CSOldStageColumnCreated.Length)
-    $sizeWidth = [math]::Max(10, [int]$m.CSOldStageColumnSize.Length)
+    $folderWidth = [math]::Max(38, [int]$m.CSStageColumnFolder.Length)
+    $dateWidth = [math]::Max(19, [int]$m.CSStageColumnCreated.Length)
+    $sizeWidth = [math]::Max(10, [int]$m.CSStageColumnSize.Length)
     $format = '{0,-' + $folderWidth + '}  {1,-' + $dateWidth + '}  {2,' + $sizeWidth + '}'
-    Write-Host ($format -f $m.CSOldStageColumnFolder, $m.CSOldStageColumnCreated, $m.CSOldStageColumnSize)
+    Write-Host ($format -f $m.CSStageColumnFolder, $m.CSStageColumnCreated, $m.CSStageColumnSize)
     Write-Host ($format -f ('-' * $folderWidth), ('-' * $dateWidth), ('-' * $sizeWidth))
     foreach ($entry in $entries) {
         Write-Host ($format -f $entry.Folder, $entry.Created, $entry.Size)
     }
-    Write-Host $m.CS27OldStageWillCleanup -ForegroundColor DarkGray
 }
 
 function Show-CSPreservedStages {
@@ -127,7 +126,6 @@ function Show-CSPreservedStages {
     if ($dirs.Count -eq 0) { return }
     Write-Host ''
     Write-Host ($m.CSStagePreserved -f $dirs.Count) -ForegroundColor Yellow
-    Write-Host ($m.CSOldStageLocation -f $base) -ForegroundColor DarkGray
 }
 
 function Assert-CSPendingRebootClear {

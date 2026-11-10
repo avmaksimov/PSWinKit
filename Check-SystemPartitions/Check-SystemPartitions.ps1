@@ -30,6 +30,7 @@ $script:GiB = [int64]1073741824
 $script:KiB = [int64]1024
 $script:RecoveryGuid = 'DE94BBA4-06D1-4D40-A16A-BFD50179D6AC'
 $script:CSStagingCleanedSuccessfully = $false
+$script:CSStagingCleanupAllowed = $false
 $script:EfiGuid = 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B'
 $script:MsrGuid = 'E3C9E316-0B5C-4DB8-817D-F92DF00215AE'
 function Format-PartitionSize([int64]$bytes) {
@@ -604,11 +605,6 @@ try {
         $script:CSRunHandled = $true
         return
     }
-    # Show previous rescue stages even when the subsequent WinRE assessment
-    # fails. No removal or deletion confirmation is offered before verification.
-    try { Show-CSExistingStages }
-    catch { Write-Warning $_.Exception.Message }
-
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
     Write-Host ''
@@ -947,9 +943,9 @@ try {
             }
         }
     }
-    # Automatically remove all rescue stages, including this run's stage,
-    # only after final readback (or verified healthy no-change diagnostics).
-    # On failures and interruptions the files remain for manual recovery.
+    # Only allow cleanup after successful execution/readback or verified
+    # healthy no-change diagnostics. Actual cleanup follows the final stage
+    # report in finally, so failures and Ctrl+C retain their rescue images.
     $anySelectedAction = ($optimiseC -or $selectedAudits.Count -gt 0)
     $normalCompletion = ($selectedAudits.Count -eq $selected.Count -and
         $invalid.Count -eq 0 -and $assessment.Verified -and
@@ -960,8 +956,7 @@ try {
             if ($finalRE.Enabled -and $null -ne $finalRE.DiskNumber -and
                 $null -ne $finalRE.PartitionNumber -and
                 [int]$finalRE.DiskNumber -eq [int]$disk.Number) {
-                Invoke-CSCleanupStaging
-                $script:CSStagingCleanedSuccessfully = $true
+                $script:CSStagingCleanupAllowed = $true
             }
         } catch {
             if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
@@ -985,6 +980,25 @@ finally {
     # Ctrl+C may bypass catch, but normally still enters finally.
     if (-not $script:CSRunHandled) { $utility.InterruptedByUser = $true }
     try {
+        # Capture and show the existing Stage-* folders before deletion.
+        # This is deliberately at the end, both for successful and failed runs.
+        $stageReportSucceeded = $false
+        try {
+            Show-CSExistingStages
+            $stageReportSucceeded = $true
+        } catch {
+            Write-Warning $_.Exception.Message
+        }
+        if ($stageReportSucceeded -and $script:CSStagingCleanupAllowed -and
+            -not $utility.InterruptedByUser) {
+            try {
+                Invoke-CSCleanupStaging
+                $script:CSStagingCleanedSuccessfully = $true
+            } catch {
+                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                Write-Warning $_.Exception.Message
+            }
+        }
         if (-not $script:CSStagingCleanedSuccessfully) {
             try { Show-CSPreservedStages }
             catch { Write-Warning $_.Exception.Message }
