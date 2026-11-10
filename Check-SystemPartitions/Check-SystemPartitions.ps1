@@ -17,6 +17,11 @@ $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator `
     -LanguageFile $LanguageFile
 if ($null -eq $utility) { return }
 $m = $utility.Messages
+# Execution.ps1 — execution preflight, disk and WinRE changes, staging safety.
+# IsoWinRE.ps1 — ISO discovery, image selection and Winre.wim extraction.
+# Planning.ps1 — read-only WinRE assessment and partition geometry decisions.
+# Cleanup.ps1 — audit and optional deletion of obsolete partitions.
+# Common/Common.ps1 — launch, elevation, localization and exit handling.
 . (Join-Path $PSScriptRoot 'Execution.ps1')
 . (Join-Path $PSScriptRoot 'IsoWinRE.ps1')
 . (Join-Path $PSScriptRoot 'Planning.ps1')
@@ -597,6 +602,7 @@ try {
         } else { $reSuffix = $m.CSReUnknown }
     }
     Write-Host ($m.CSInfoRe -f $reText, $reSuffix)
+    $inactiveRecovery = Get-CSInactiveRecoveryCandidate $disk $c $parts $reInfo
 
     # Read-only boot check BEFORE any ISO/edition or cleanup prompt.
     if (Test-CSPendingBootCheckC) {
@@ -610,7 +616,15 @@ try {
     Write-Host ''
     Write-Host ('=== ' + $m.CS26ImageTitle + ' ===') -ForegroundColor Cyan
     Write-Host $m.CS26ImageChecking -ForegroundColor DarkGray
-    $assessment = Get-CSImageAssessment $disk $c $parts $reInfo $activeRecovery
+    $assessment = if ($null -ne $inactiveRecovery) {
+        Get-CSInactiveRecoveryAssessment $disk $c $parts $reInfo $inactiveRecovery
+    } else {
+        Get-CSImageAssessment $disk $c $parts $reInfo $activeRecovery
+    }
+    if ($null -eq $inactiveRecovery -and -not $assessment.Verified -and
+        [string]$disk.PartitionStyle -eq 'MBR') {
+        $assessment = Get-CSMissingMBRImageAssessment $disk $c $parts $reInfo $assessment
+    }
     $vol = $null
     try { $vol = Get-Volume -DriveLetter C -ErrorAction Stop } catch { }
     if ($assessment.Verified) {
@@ -624,8 +638,28 @@ try {
     } else {
         Write-Host ($m.CS26ImageUnavailable -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
     }
-    $proposal = Get-CSPlanningDecision $disk $c $parts $reInfo $activeRecovery `
-        $assessment $vol $usableBounds
+    if ($null -ne $inactiveRecovery) {
+        if (-not $assessment.Verified -or $null -eq $assessment.Existing) {
+            Write-Host $m.CSInactiveImageUnavailable -ForegroundColor Yellow
+        } elseif ($null -ne $assessment.MinRecoveryBytes -and
+            [int64]$inactiveRecovery.Size -lt [int64]$assessment.MinRecoveryBytes) {
+            Write-Host ($m.CSInactiveSizeTooSmall -f
+                (Format-DetailedSize ([int64]$inactiveRecovery.Size)),
+                (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes))) -ForegroundColor Yellow
+        } elseif ($null -eq $assessment.FreeBytes -or
+            [int64]$assessment.FreeBytes -lt $script:CSFreeReserve) {
+            Write-Host $m.CSInactiveVolumeUnsafe -ForegroundColor Yellow
+        }
+    }
+    $proposal = if ($null -ne $inactiveRecovery) { $null } else {
+        Get-CSPlanningDecision $disk $c $parts $reInfo $activeRecovery `
+            $assessment $vol $usableBounds
+    }
+    if ($null -eq $proposal -and $null -eq $inactiveRecovery -and
+        [string]$disk.PartitionStyle -eq 'MBR') {
+        $proposal = Get-CSMissingMBRPlan $disk $c $parts $reInfo `
+            $assessment $vol $usableBounds
+    }
     $geometryCandidate = if ($null -ne $proposal) { $proposal.Geometry } else { $null }
     $canPreviewC = ($null -ne $geometryCandidate -and $geometryCandidate.IsGeometryPossible)
     $cRow = @($rows | Where-Object { $_.Kind -eq 'Windows' } | Select-Object -First 1)
@@ -650,6 +684,18 @@ try {
             }
         }
     }
+    if ($null -ne $inactiveRecovery) {
+        $inactiveRows = @($rows | Where-Object {
+            [int]$_.PartitionNumber -eq [int]$inactiveRecovery.PartitionNumber
+        })
+        if ($inactiveRows.Count -eq 1) {
+            $inactiveRows[0].Role = $m.CSInactiveRecoveryRole
+            $inactiveRows[0].Recommendation = if (
+                Test-CSInactiveRecoveryReady $disk $inactiveRecovery $assessment) {
+                $m.CSInactiveRecoveryRecommendation
+            } else { $m.CSInactiveRecoveryReview }
+        }
+    }
     Show-Partitions $rows
     if ($null -eq $usableBounds) {
         Write-Host $m.CSGptBoundsUnavailable -ForegroundColor Yellow
@@ -665,9 +711,27 @@ try {
         Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow
     }
 
+    # Disabled WinRE with one valid image on a separate Recovery partition of
+    # THIS physical system disk: register in place, without repartitioning.
+    # Do not offer a destructive Recovery operation in this same run.
+    if (Test-CSInactiveRecoveryReady $disk $inactiveRecovery $assessment) {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSProposedPlanTitle + ' ===') -ForegroundColor Cyan
+        Write-Host ($m.CSInactiveRecoveryPlan -f $disk.Number, $inactiveRecovery.PartitionNumber)
+        if (Invoke-CSRegisterInactiveRecovery $disk $c $inactiveRecovery $reInfo) {
+            Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c -CleanupAudits @()
+            $script:CSStagingCleanupAllowed = $true
+        }
+        $script:CSRunHandled = $true
+        return
+    }
+
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false
-    $candidates = @($rows | Where-Object { Test-DeletionCandidate $_ })
+    $candidates = @($rows | Where-Object {
+        (Test-DeletionCandidate $_) -and
+        -not (-not $reInfo.Enabled -and $_.Kind -eq 'RecoveryOther')
+    })
     # Inspect every suspicious partition BEFORE it can be selected.
     # The audit is read-only. A partition with unknown/OEM contents is blocked
     # from optional deletion, even when the user selects it for simulation.

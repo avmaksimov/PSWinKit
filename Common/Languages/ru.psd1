@@ -467,6 +467,21 @@
     }
 
     'Check-SystemPartitions' = @{
+        CSInactiveRecoveryRole = 'Recovery (WinRE отключена)'
+        CSInactiveRecoveryRecommendation = 'Зарегистрировать WinRE без изменения разделов'
+        CSInactiveRecoveryReview = 'Проверить образ и свободное место; не удалять'
+        CSInactiveOtherDisk = 'WinRE ссылается на другой физический диск. Автоматическое восстановление запрещено.'
+        CSInactiveMultiple = 'На системном диске несколько разделов Recovery. Автоматическая регистрация запрещена.'
+        CSInactiveRegisteredElsewhere = 'Отключённая WinRE зарегистрирована на другом разделе. Автоматическая регистрация запрещена.'
+        CSInactiveRecoverySource = 'Незарегистрированный Recovery на системном диске (раздел {0})'
+        CSInactiveRecoveryPlan = 'Зарегистрировать проверенный образ WinRE на системном диске {0}, разделе {1}, без изменения разделов.'
+        CSInactiveRecoveryQuestion = 'Включить Windows RE, используя образ на разделе {0}?'
+        CSInactiveStateChanged = 'Состояние Windows RE или раздел Recovery изменились. Регистрация отменена.'
+        CSInactiveSizeTooSmall = 'Существующий Recovery слишком мал ({0}); требуется не менее {1}. Автоматическое восстановление отключённой WinRE с переразметкой пока не поддерживается.'
+        CSInactiveVolumeUnsafe = 'Раздел Recovery не в формате NTFS либо на нём недостаточно свободного места.'
+        CSInactiveImageUnavailable = 'На выбранном разделе Recovery нет проверенного образа WinRE. Автоматическая регистрация невозможна.'
+        CSInactiveRecoverySuccess = 'Windows RE включена на диске {0}, разделе {1}.'
+        CSMBRMissingNotice = 'BIOS/MBR: создание нового раздела Recovery для отключённой WinRE. Существующие разделы не удаляются.'
         CSAnalysisTitle             = 'Диагностика системных разделов'
         CSInfoDisk                  = 'Системный диск: {0} ({1}), {2}'
         CSInfoRe                    = 'Windows RE: {0}{1}'

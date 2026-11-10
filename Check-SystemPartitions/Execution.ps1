@@ -1237,22 +1237,39 @@ function Assert-CSMissingRecoveryPreflight($disk, $c, $parts, $reInfo, $proposal
         if ($reInfo.Enabled -or $null -ne $reInfo.DiskNumber -or
             $null -ne $reInfo.PartitionNumber) { throw $m.CSNewWinREStateChanged }
     } else {
-        # MBR migration is supported ONLY from the running, registered WinRE
-        # on this exact C: partition. Never touch unrelated active volumes.
-        if (-not $proposal.MigratingWinREOnC -or -not $reInfo.Enabled -or
-            $null -eq $reInfo.DiskNumber -or $null -eq $reInfo.PartitionNumber -or
-            [int]$reInfo.DiskNumber -ne [int]$disk.Number -or
-            [int]$reInfo.PartitionNumber -ne [int]$c.PartitionNumber -or
-            [string]$c.Type -ne 'IFS' -or $parts.Count -ge 4 -or
+        # Two separate MBR paths: migrate a registered WinRE on C: or
+        # create Recovery when WinRE is disabled and no Recovery exists.
+        # Never treat an arbitrary registration or an OEM/extended volume as safe.
+        if ([string]$c.Type -ne 'IFS' -or $parts.Count -ge 4 -or
             [int64]$disk.Size -ge 2TB) { throw $m.CSMBRMigrationBlocked }
         foreach ($part in $parts) {
-            if ([string]$part.Type -match '(?i)Extended|Logical|Unknown|Reserved|OEM') {
+            if ([int]$part.DiskNumber -ne [int]$disk.Number -or
+                [string]$part.Type -match '(?i)Extended|Logical|Unknown|Reserved|OEM') {
                 throw $m.CSMBRMigrationBlocked
             }
         }
-        $originalImage = Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE\Winre.wim'
-        if ([string]$proposal.ImageSourcePath -ine $originalImage -or
-            -not [IO.File]::Exists($originalImage)) { throw $m.CSMBRUnsafeSource }
+        $missingMBR = ($null -ne $proposal.PSObject.Properties['MissingMBR'] -and
+            [bool]$proposal.MissingMBR)
+        if ($proposal.MigratingWinREOnC) {
+            if ($missingMBR -or -not $reInfo.Enabled -or
+                $null -eq $reInfo.DiskNumber -or $null -eq $reInfo.PartitionNumber -or
+                [int]$reInfo.DiskNumber -ne [int]$disk.Number -or
+                [int]$reInfo.PartitionNumber -ne [int]$c.PartitionNumber) {
+                throw $m.CSMBRMigrationBlocked
+            }
+            $originalImage = Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE\Winre.wim'
+            if ([string]$proposal.ImageSourcePath -ine $originalImage -or
+                -not [IO.File]::Exists($originalImage)) { throw $m.CSMBRUnsafeSource }
+        } elseif ($missingMBR) {
+            if (-not (Test-CSMissingMBRRecovery $disk $c $parts $reInfo) -or
+                [string]::IsNullOrWhiteSpace([string]$proposal.ImageSourcePath) -or
+                -not [IO.File]::Exists([string]$proposal.ImageSourcePath)) {
+                throw $m.CSMBRMigrationBlocked
+            }
+            Assert-CSWim ([string]$proposal.ImageSourcePath)
+        } else {
+            throw $m.CSMBRMigrationBlocked
+        }
     }
     if (@($parts | Where-Object { Test-RecoveryPartition $_ $style }).Count -gt 0) {
         throw $m.CSNewExistingRecovery
@@ -1399,7 +1416,11 @@ function Invoke-CSCreateMissingRecovery {
         Write-Host ('=== ' + $m.CSExecPreflightTitle + ' ===') -ForegroundColor Cyan
         Write-Host $m.CSNewPreflight -ForegroundColor Yellow
         if ([string]$Disk.PartitionStyle -eq 'MBR') {
-            Write-Host $m.CSMBRMigrationNotice -ForegroundColor Yellow
+            if ($Proposal.MigratingWinREOnC) {
+                Write-Host $m.CSMBRMigrationNotice -ForegroundColor Yellow
+            } else {
+                Write-Host $m.CSMBRMissingNotice -ForegroundColor Yellow
+            }
         }
         Import-Module Dism -ErrorAction Stop
         Assert-CSMissingRecoveryPreflight $Disk $C $Parts $ReInfo $Proposal $RebuildGeometry
@@ -1611,7 +1632,7 @@ function Invoke-CSCreateMissingRecovery {
         $completed = $true
         $script:CSExecLastSucceeded = $true
         Write-Host $m.CSNewComplete -ForegroundColor Green
-        if ($isMbr) { Write-Host $m.CSMBRSourceKept -ForegroundColor DarkGray }
+        if ($Proposal.MigratingWinREOnC) { Write-Host $m.CSMBRSourceKept -ForegroundColor DarkGray }
     } catch {
         Write-Host ''
         Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
@@ -1630,3 +1651,87 @@ function Invoke-CSCreateMissingRecovery {
         Show-CSTemporaryCleanupResult $false
     }
 }
+
+# Register a validated, inactive WinRE from the physical Windows disk.
+# No partition or image changes are performed by this function.
+
+function Invoke-CSRegisterInactiveRecovery($disk, $c, $part, $reInfo) {
+    if ($reInfo.Enabled) { throw $m.CSInactiveStateChanged }
+    if (-not (Read-YesNo ($m.CSInactiveRecoveryQuestion -f $part.PartitionNumber))) {
+        Write-Host $m.CSExecCancelled -ForegroundColor Yellow
+        return $false
+    }
+    Assert-CSBasicDisk $disk @((Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop))
+    Assert-CSPendingRebootClear
+    $liveDisk = Get-Disk -Number ([int]$disk.Number) -ErrorAction Stop
+    if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId -or
+        [string]$liveDisk.PartitionStyle -ne [string]$disk.PartitionStyle -or
+        [int64]$liveDisk.Size -ne [int64]$disk.Size) { throw $m.CSExecLayoutChanged }
+    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+    if ([int]$liveC.DiskNumber -ne [int]$disk.Number -or
+        [int64]$liveC.Offset -ne [int64]$c.Offset -or
+        [int64]$liveC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
+    $liveParts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop)
+    $liveRE = Get-WinReSnapshot
+    $again = Get-CSInactiveRecoveryCandidate $liveDisk $liveC $liveParts $liveRE
+    if ($null -eq $again -or [int]$again.PartitionNumber -ne [int]$part.PartitionNumber -or
+        [int64]$again.Offset -ne [int64]$part.Offset -or
+        [int64]$again.Size -ne [int64]$part.Size) { throw $m.CSInactiveStateChanged }
+    $volume = Get-Volume -Partition $again -ErrorAction Stop
+    if ([string]$volume.FileSystem -ne 'NTFS' -or
+        [int64]$volume.SizeRemaining -lt $script:CSFreeReserve) {
+        throw $m.CSInactiveVolumeUnsafe
+    }
+    # Partition geometry and NTFS capacity are distinct. Even if the volume
+    # has 250 MiB free, it may be smaller than the minimum Recovery target.
+    $liveMin = Align-UpMiB ([int64](
+        ([int64]$volume.Size - [int64]$volume.SizeRemaining) +
+        $script:CSFreeReserve +
+        [math]::Max([int64]0, [int64]$again.Size - [int64]$volume.Size) +
+        $script:MiB + $script:CSFormatVariation))
+    if ([int64]$again.Size -lt $liveMin) {
+        throw ($m.CSInactiveSizeTooSmall -f
+            (Format-DetailedSize ([int64]$again.Size)),
+            (Format-DetailedSize $liveMin))
+    }
+    try {
+        $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$again.PartitionNumber)
+        $folder = Assert-CSRecoveryContent $root
+        $wim = Join-Path $folder 'Winre.wim'
+        if (-not [IO.File]::Exists($wim)) { throw $m.CSExecImageMissing }
+        Assert-CSWim $wim
+        # Do not rely on a previous assessment: the registration must still
+        # refer to exactly this disk and partition immediately before writing.
+        $still = Get-WinReSnapshot
+        if ($still.Enabled -or
+            ($null -ne $still.DiskNumber -and [int]$still.DiskNumber -ne [int]$disk.Number) -or
+            ($null -ne $still.PartitionNumber -and [int]$still.PartitionNumber -ne [int]$again.PartitionNumber)) {
+            throw $m.CSInactiveStateChanged
+        }
+        Write-Host ('=== ' + $m.CSNewApplyingTitle + ' ===') -ForegroundColor Cyan
+        Write-Host ($m.CSExecSetReimage -f $folder)
+        Invoke-CSExternal 'reagentc.exe' @('/setreimage','/path',$folder)
+        Write-Host $m.CSExecEnableReagentc
+        Invoke-CSExternal 'reagentc.exe' @('/enable')
+        $final = Get-WinReSnapshot
+        if (-not $final.Enabled -or $null -eq $final.DiskNumber -or
+            $null -eq $final.PartitionNumber -or
+            [int]$final.DiskNumber -ne [int]$disk.Number -or
+            [int]$final.PartitionNumber -ne [int]$again.PartitionNumber) {
+            throw $m.CSExecWinRENotRegistered
+        }
+    } finally {
+        if ($script:CSExecMount) { Close-CSRecoveryMount ([int]$disk.Number) }
+    }
+    # Second check after detach: the registration must remain usable.
+    $check = Get-WinReSnapshot
+    if (-not $check.Enabled -or $null -eq $check.DiskNumber -or
+        $null -eq $check.PartitionNumber -or
+        [int]$check.DiskNumber -ne [int]$disk.Number -or
+        [int]$check.PartitionNumber -ne [int]$part.PartitionNumber) {
+        throw $m.CSExecWinRENotRegistered
+    }
+    Write-Host ($m.CSInactiveRecoverySuccess -f $disk.Number, $part.PartitionNumber) -ForegroundColor Green
+    return $true
+}
+

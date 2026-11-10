@@ -322,3 +322,186 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
         Geometry = $geo
     }
 }
+
+# Additional WinRE planning: inactive Recovery on the Windows disk and
+# conservative MBR partition creation. No disk changes here.
+
+function Get-CSInactiveRecoveryCandidate($disk, $c, $parts, $reInfo) {
+    if ($reInfo.Enabled) { return $null }
+    if ($null -ne $reInfo.DiskNumber -and
+        [int]$reInfo.DiskNumber -ne [int]$disk.Number) {
+        Write-Host $m.CSInactiveOtherDisk -ForegroundColor Yellow
+        return $null
+    }
+    $matches = @($parts | Where-Object {
+        Test-RecoveryPartition $_ ([string]$disk.PartitionStyle)
+    })
+    if ($matches.Count -ne 1) {
+        if ($matches.Count -gt 1) {
+            Write-Host $m.CSInactiveMultiple -ForegroundColor Yellow
+        }
+        return $null
+    }
+    $part = $matches[0]
+    if ([int]$part.DiskNumber -ne [int]$disk.Number -or
+        [int]$part.PartitionNumber -eq [int]$c.PartitionNumber -or
+        $part.IsBoot -or $part.IsSystem -or $part.IsActive -or
+        $part.DriveLetter) { return $null }
+    # A disabled REAgentC may retain a stale location. Do not pick a DIFFERENT
+    # partition by guesswork when its recorded partition number is present.
+    if ($null -ne $reInfo.PartitionNumber -and
+        [int]$reInfo.PartitionNumber -ne [int]$part.PartitionNumber) {
+        Write-Host $m.CSInactiveRegisteredElsewhere -ForegroundColor Yellow
+        return $null
+    }
+    $liveDisk = Get-Disk -Number ([int]$part.DiskNumber) -ErrorAction Stop
+    if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId -or
+        [string]$liveDisk.PartitionStyle -ne [string]$disk.PartitionStyle) {
+        return $null
+    }
+    return $part
+}
+
+# The regular assessment can inspect a partition supplied as activeRecovery,
+# without writing to it. For inactive Recovery the source label must not say
+# "registered", and registration is allowed only if the WIM was found THERE.
+function Get-CSInactiveRecoveryAssessment($disk, $c, $parts, $reInfo, $candidate) {
+    $result = Get-CSImageAssessment $disk $c $parts $reInfo $candidate
+    # Report the real source even when that partition is too small to use.
+    if ($result.Verified -and $null -ne $result.Existing -and
+        [int]$result.Existing.PartitionNumber -eq [int]$candidate.PartitionNumber -and
+        [int]$result.Existing.DiskNumber -eq [int]$disk.Number) {
+        $result.Source = $m.CSInactiveRecoverySource -f $candidate.PartitionNumber
+    }
+    if (-not $result.Verified -or $null -eq $result.Existing -or
+        [int]$result.Existing.PartitionNumber -ne [int]$candidate.PartitionNumber -or
+        [int]$result.Existing.DiskNumber -ne [int]$disk.Number -or
+        $null -eq $result.FreeBytes -or
+        [int64]$result.FreeBytes -lt $script:CSFreeReserve -or
+        $null -eq $result.MinRecoveryBytes -or
+        [int64]$candidate.Size -lt [int64]$result.MinRecoveryBytes) {
+        return $result
+    }
+    return $result
+}
+
+# True only when the image is verified and its existing partition can serve it.
+# This does NOT attempt to resize a disabled Recovery partition.
+function Test-CSInactiveRecoveryReady($disk, $candidate, $assessment) {
+    return ($null -ne $candidate -and $null -ne $assessment -and
+        $assessment.Verified -and $null -ne $assessment.Existing -and
+        [int]$candidate.DiskNumber -eq [int]$disk.Number -and
+        [int]$assessment.Existing.DiskNumber -eq [int]$disk.Number -and
+        [int]$assessment.Existing.PartitionNumber -eq [int]$candidate.PartitionNumber -and
+        $null -ne $assessment.FreeBytes -and
+        [int64]$assessment.FreeBytes -ge $script:CSFreeReserve -and
+        $null -ne $assessment.MinRecoveryBytes -and
+        [int64]$candidate.Size -ge [int64]$assessment.MinRecoveryBytes)
+}
+
+function Test-CSMissingMBRRecovery($disk, $c, $parts, $reInfo) {
+    # Disabled registration may be empty or may still refer to the running C:.
+    # Every other disk/partition reference is ambiguous and blocks creation.
+    $emptyRegistration = ($null -eq $reInfo.DiskNumber -and
+        $null -eq $reInfo.PartitionNumber)
+    $registeredOnC = ($null -ne $reInfo.DiskNumber -and
+        $null -ne $reInfo.PartitionNumber -and
+        [int]$reInfo.DiskNumber -eq [int]$disk.Number -and
+        [int]$reInfo.PartitionNumber -eq [int]$c.PartitionNumber)
+    if ([string]$disk.PartitionStyle -ne 'MBR' -or
+        $reInfo.Enabled -or (-not $emptyRegistration -and -not $registeredOnC) -or
+        -not $disk.IsBoot -or $disk.IsOffline -or $disk.IsReadOnly -or
+        [int64]$disk.Size -ge 2TB -or $parts.Count -ge 4 -or
+        [string]$c.Type -ne 'IFS') { return $false }
+    foreach ($part in $parts) {
+        if ([int]$part.DiskNumber -ne [int]$disk.Number -or
+            [string]$part.Type -match '(?i)Extended|Logical|Unknown|Reserved|OEM' -or
+            (Test-RecoveryPartition $part 'MBR')) { return $false }
+    }
+    return $true
+}
+
+function Get-CSMissingMBRImageAssessment($disk, $c, $parts, $reInfo, $original) {
+    if (-not (Test-CSMissingMBRRecovery $disk $c $parts $reInfo)) { return $original }
+    if ($original.Verified -and $null -eq $original.Existing) { return $original }
+    $path = $null
+    $source = ''
+    $localFolder = Join-Path ([string]$env:SystemDrive + '\') 'Recovery\WindowsRE'
+    $localWim = Join-Path $localFolder 'Winre.wim'
+    if ([IO.File]::Exists($localWim)) {
+        $directory = Get-Item -LiteralPath $localFolder -Force -ErrorAction Stop
+        if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw $m.CSMBRUnsafeSource
+        }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $localFolder -Force -ErrorAction Stop)) {
+            if ($entry.PSIsContainer -or
+                (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+                $entry.Name -notin @('Winre.wim','boot.sdi','ReAgent.xml','ReAgent.old',
+                    'SrSettings.ini','WifiSettings.ini','ReCustomization.xml')) {
+                throw $m.CSMBRUnsafeSource
+            }
+        }
+        Assert-CSWim $localWim
+        $path = $localWim
+        $source = $m.CSMBRSourceOnC
+    }
+    if (-not $path) {
+        $path = Get-CSISOImage
+        if ($path) { $source = $m.CSIsoImageSource }
+    }
+    if (-not $path) { return $original }
+    Assert-CSWim $path
+    $bytes = [int64](Get-Item -LiteralPath $path -Force -ErrorAction Stop).Length
+    $extra = [int64]0
+    foreach ($file in @(Get-ChildItem -LiteralPath (Split-Path -Parent $path) -File -Force -ErrorAction Stop |
+        Where-Object { $_.Name -ine 'Winre.wim' })) {
+        $extra += [int64]$file.Length
+    }
+    $minimum = Align-UpMiB ([int64][math]::Max([double]$script:CSCreateMinimum,
+        [double]($bytes + $extra + $script:CSNewNtfsAllowance +
+            $script:CSFreeReserve + $script:CSFormatVariation)))
+    return [pscustomobject]@{
+        Found = $true; Verified = $true; Source = $source; WIMBytes = $bytes
+        ExtraBytes = $extra; Existing = $null; UsedBytes = $null
+        FreeBytes = $null; MinRecoveryBytes = $minimum; ImagePath = [string]$path; Error = ''
+    }
+}
+
+# MBR missing-Recovery uses the *existing* geometry calculation and executor.
+# No fabricated GPT disk and no weakening of the MBR-on-C migration rules.
+function Get-CSMissingMBRPlan($disk, $c, $parts, $reInfo, $assessment, $volume, $bounds) {
+    if (-not (Test-CSMissingMBRRecovery $disk $c $parts $reInfo) -or
+        -not $assessment.Verified -or $null -ne $assessment.Existing -or
+        $null -eq $assessment.MinRecoveryBytes -or $null -eq $volume -or
+        [string]$volume.FileSystem -ne 'NTFS' -or
+        [int64]$volume.Size -le 0 -or $null -eq $bounds) { return $null }
+    $minimum = [int64]$assessment.MinRecoveryBytes
+    $maxSize = [int64]($minimum + 512MB)
+    $originalCSize = [int64]$c.Size
+    $initial = Get-CSProposedGeometry $disk $c $parts $null $originalCSize $bounds $maxSize
+    if ($null -eq $initial) { return $null }
+    $newCSize = $originalCSize
+    if ([int64]$initial.NewSize -lt $minimum) {
+        $targetEnd = Align-DownMiB ([int64]($initial.RightEnd - $maxSize))
+        $newCSize = [int64]($targetEnd - [int64]$c.Offset)
+        if ($newCSize -le 0 -or $newCSize -ge $originalCSize) { return $null }
+    }
+    $geometry = Get-CSProposedGeometry $disk $c $parts $null $newCSize $bounds $maxSize
+    if ($null -eq $geometry -or -not $geometry.IsGeometryPossible -or
+        [int64]$geometry.NewSize -lt $minimum) { return $null }
+    return [pscustomobject]@{
+        TargetExplorerGiB = [int64][math]::Floor(
+            ([double]$volume.Size + $newCSize - $originalCSize) / $script:GiB)
+        TargetPartitionBytes = $newCSize
+        CurrentVolumeBytes = [int64]$volume.Size
+        ChangeBytes = [int64]($newCSize - $originalCSize)
+        OriginalPartitionBytes = $originalCSize
+        Beauty = $false
+        MustRepair = $true
+        MinimumRecoveryBytes = $minimum
+        ImageSourcePath = [string]$assessment.ImagePath
+        MigratingWinREOnC = $false
+        MissingMBR = $true
+        Geometry = $geometry
+    }
+}

@@ -467,6 +467,21 @@
     }
 
     'Check-SystemPartitions' = @{
+        CSInactiveRecoveryRole = 'Recovery (Windows RE disabled)'
+        CSInactiveRecoveryRecommendation = 'Register Windows RE without repartitioning'
+        CSInactiveRecoveryReview = 'Inspect image and free space; do not delete'
+        CSInactiveOtherDisk = 'WinRE has a reference to another physical disk. Automatic recovery is blocked.'
+        CSInactiveMultiple = 'Multiple Recovery partitions found on the system disk. Automatic registration is blocked.'
+        CSInactiveRegisteredElsewhere = 'The disabled WinRE registration points to another partition. Automatic registration is blocked.'
+        CSInactiveRecoverySource = 'Unregistered Recovery on system disk (partition {0})'
+        CSInactiveRecoveryPlan = 'Register the validated WinRE image on system disk {0}, partition {1}, without changing partitions.'
+        CSInactiveRecoveryQuestion = 'Enable Windows RE using the image on partition {0}?'
+        CSInactiveStateChanged = 'The Windows RE state or Recovery partition changed. Registration was cancelled.'
+        CSInactiveSizeTooSmall = 'The existing Recovery partition is too small ({0}); at least {1} is required. Repartitioning while WinRE is disabled is not yet supported.'
+        CSInactiveVolumeUnsafe = 'The Recovery volume is not NTFS or has insufficient free space.'
+        CSInactiveImageUnavailable = 'The selected Recovery partition does not contain a validated WinRE image. Automatic registration is unavailable.'
+        CSInactiveRecoverySuccess = 'Windows RE enabled on disk {0}, partition {1}.'
+        CSMBRMissingNotice = 'BIOS/MBR: create a new Recovery partition for disabled Windows RE. No existing partitions are deleted.'
         CSAnalysisTitle             = 'System partition diagnostics'
         CSInfoDisk                  = 'System disk: {0} ({1}), {2}'
         CSInfoRe                    = 'Windows RE: {0}{1}'
