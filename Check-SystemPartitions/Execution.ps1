@@ -1735,3 +1735,363 @@ function Invoke-CSRegisterInactiveRecovery($disk, $c, $part, $reInfo) {
     return $true
 }
 
+
+# A too-small, inactive Recovery. The source must be on the physical Windows
+# disk and have a verified Winre.wim. The old partition is never altered until
+# its image and settings have been staged and hash-checked.
+function Assert-CSInactiveSmallPreflight($disk, $c, $parts, $source, $proposal) {
+    Assert-CSBasicDisk $disk $parts
+    Assert-CSPendingRebootClear
+    Assert-CSBitLockerOff
+    $liveDisk = Get-Disk -Number ([int]$disk.Number) -ErrorAction Stop
+    if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId -or
+        [string]$liveDisk.PartitionStyle -ne [string]$disk.PartitionStyle -or
+        [int64]$liveDisk.Size -ne [int64]$disk.Size) { throw $m.CSExecLayoutChanged }
+    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+    if ([int]$liveC.DiskNumber -ne [int]$disk.Number -or
+        [int64]$liveC.Offset -ne [int64]$c.Offset -or
+        [int64]$liveC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
+    $liveParts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop |
+        Sort-Object Offset)
+    $liveRE = Get-WinReSnapshot
+    $candidate = Get-CSInactiveRecoveryCandidate $liveDisk $liveC $liveParts $liveRE
+    if ($null -eq $candidate -or
+        [int]$candidate.DiskNumber -ne [int]$source.DiskNumber -or
+        [int]$candidate.PartitionNumber -ne [int]$source.PartitionNumber -or
+        [int64]$candidate.Offset -ne [int64]$source.Offset -or
+        [int64]$candidate.Size -ne [int64]$source.Size -or
+        -not (Test-RecoveryPartition $candidate ([string]$disk.PartitionStyle))) {
+        throw $m.CSInactiveStateChanged
+    }
+    $volume = Get-Volume -DriveLetter C -ErrorAction Stop
+    if ([string]$volume.FileSystem -ne 'NTFS') { throw $m.CSExecNtfsOnly }
+    if ([string]$volume.HealthStatus -notin @('Healthy','0','ScanNeeded','1','SpotFixNeeded','2','FullRepairNeeded','3')) {
+        throw $m.CSExecDiskUnsafe
+    }
+    if ([int64]$proposal.TargetPartitionBytes -gt [int64]$c.Size -or
+        [int64]$proposal.TargetPartitionBytes -le 0 -or
+        [int64]$proposal.NewSize -lt [int64]$proposal.MinimumRecoveryBytes -or
+        (([int64]$proposal.NewStart % 1MB) -ne 0 -and $proposal.Mode -ne 'Right') -or
+        $proposal.Mode -notin @('Right','Adjacent','BeforeD')) {
+        throw $m.CSExecLayoutUnsupported
+    }
+    $boundary = [int64]$proposal.RightEnd
+    if ($proposal.Mode -eq 'Right' -and
+        ([int64]$proposal.NewStart -ne [int64]$candidate.Offset -or
+         [int64]$proposal.NewSize -le [int64]$candidate.Size)) {
+        throw $m.CSExecLayoutUnsupported
+    }
+    $newEnd = [int64]$proposal.NewStart + [int64]$proposal.NewSize
+    if ($newEnd -gt $boundary -or $newEnd -le [int64]$proposal.NewStart -or
+        ([int64]$proposal.NewSize % [int64]$disk.LogicalSectorSize) -ne 0) {
+        throw $m.CSExecLayoutUnsupported
+    }
+    foreach ($p in $liveParts) {
+        if ($proposal.Mode -ne 'BeforeD' -and
+            [int]$p.PartitionNumber -eq [int]$source.PartitionNumber) { continue }
+        if ($proposal.Mode -eq 'Right' -and [int]$p.PartitionNumber -eq [int]$c.PartitionNumber) { continue }
+        if ([int64]$p.Offset -lt $newEnd -and (Get-PartitionEnd $p) -gt [int64]$proposal.NewStart) {
+            if ([int]$p.PartitionNumber -ne [int]$c.PartitionNumber) {
+                throw $m.CSNewNextPartitionProtected
+            }
+        }
+    }
+    if ($proposal.Mode -ne 'Right') {
+        $endC = [int64]$c.Offset + [int64]$proposal.TargetPartitionBytes
+        if ((Align-UpMiB $endC) -ne [int64]$proposal.NewStart) {
+            throw $m.CSExecLayoutUnsupported
+        }
+        $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
+        if ([int64]$proposal.TargetPartitionBytes -lt [int64]$supported.SizeMin -or
+            [int64]$proposal.TargetPartitionBytes -gt [int64]$c.Size) {
+            throw $m.CSExecShrinkBlocked
+        }
+    }
+    if ($proposal.Mode -eq 'BeforeD') {
+        # The source remains intact until the new WinRE has been registered.
+        if (-not $proposal.KeepOld -or $source.Offset -le $proposal.RightEnd) {
+            throw $m.CSExecLayoutUnsupported
+        }
+        if ([string]$disk.PartitionStyle -eq 'MBR' -and $liveParts.Count -ge 4) {
+            throw $m.CSMBRMigrationBlocked
+        }
+        $following = @($liveParts | Where-Object {
+            [int64]$_.Offset -ge (Get-PartitionEnd $c)
+        } | Sort-Object Offset)
+        if ($following.Count -lt 2 -or [string]$following[0].DriveLetter -ne 'D' -or
+            [int64]$following[0].Offset -ne $boundary -or
+            [int]$following[1].PartitionNumber -ne [int]$source.PartitionNumber) {
+            throw $m.CSNewNextPartitionProtected
+        }
+    }
+}
+
+# Registers the verified new/in-place image. This helper does not ask for a
+# second confirmation: the final plan was already approved before any writes.
+function Invoke-CSRegisterPreparedRecovery($disk, $partitionNumber, $stagedHash, [bool]$CopyFiles) {
+    $partition = Get-Partition -DiskNumber ([int]$disk.Number) -PartitionNumber ([int]$partitionNumber) `
+        -ErrorAction Stop
+    if ([int]$partition.DiskNumber -ne [int]$disk.Number) { throw $m.CSExecLayoutChanged }
+    $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$partitionNumber)
+    try {
+        if ($CopyFiles) {
+            $folder = Join-Path $root 'Recovery\WindowsRE'
+            [void](New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop)
+            $sourceWim = Join-Path $script:CSExecStaging 'Winre.wim'
+            $dest = Join-Path $folder 'Winre.wim'
+            Copy-Item -LiteralPath $sourceWim -Destination $dest -Force -ErrorAction Stop
+            if ((Get-CSFileSha256 $dest) -ne $stagedHash) { throw $m.CSExecHashMismatch }
+            $extra = Join-Path $script:CSExecStaging 'RecoveryFiles'
+            if (Test-Path -LiteralPath $extra -PathType Container) {
+                foreach ($saved in @(Get-ChildItem -LiteralPath $extra -File -Force -ErrorAction Stop)) {
+                    if ($saved.Name -in @('ReAgent.xml','ReAgent.old')) { continue }
+                    if ($saved.Name -notin @('boot.sdi','SrSettings.ini',
+                        'WifiSettings.ini','ReCustomization.xml')) {
+                        throw ($m.CSExecRecoveryUnexpected -f $saved.Name)
+                    }
+                    $destFile = Join-Path $folder $saved.Name
+                    Copy-Item -LiteralPath $saved.FullName -Destination $destFile -Force -ErrorAction Stop
+                    if ((Get-CSFileSha256 $destFile) -ne (Get-CSFileSha256 $saved.FullName)) {
+                        throw $m.CSExecHashMismatch
+                    }
+                }
+            }
+        } else {
+            $folder = Assert-CSRecoveryContent $root
+            $wim = Join-Path $folder 'Winre.wim'
+            Assert-CSWim $wim
+            if ((Get-CSFileSha256 $wim) -ne $stagedHash) { throw $m.CSExecHashMismatch }
+        }
+        $liveVol = Get-Volume -Partition $partition -ErrorAction Stop
+        if ([int64]$liveVol.SizeRemaining -lt $script:CSFreeReserve) {
+            throw $m.CSExecRecoveryTooSmall
+        }
+        Write-Host ($m.CSExecSetReimage -f $folder)
+        Invoke-CSExternal 'reagentc.exe' @('/setreimage','/path',$folder)
+        Write-Host $m.CSExecEnableReagentc
+        Invoke-CSExternal 'reagentc.exe' @('/enable')
+        $registered = Get-WinReSnapshot
+        if (-not $registered.Enabled -or $null -eq $registered.DiskNumber -or
+            $null -eq $registered.PartitionNumber -or
+            [int]$registered.DiskNumber -ne [int]$disk.Number -or
+            [int]$registered.PartitionNumber -ne [int]$partitionNumber) {
+            throw $m.CSExecWinRENotRegistered
+        }
+    } finally {
+        Close-CSRecoveryMount ([int]$disk.Number)
+    }
+    $final = Get-WinReSnapshot
+    if (-not $final.Enabled -or $null -eq $final.DiskNumber -or
+        $null -eq $final.PartitionNumber -or
+        [int]$final.DiskNumber -ne [int]$disk.Number -or
+        [int]$final.PartitionNumber -ne [int]$partitionNumber) {
+        throw $m.CSExecWinRENotRegistered
+    }
+}
+
+function Invoke-CSRepairSmallInactiveRecovery($disk, $c, $parts, $reInfo, $source, $proposal) {
+    $script:CSExecMutated = $false
+    $script:CSExecLastSucceeded = $false
+    $script:CSExecErrorReportedMessage = $null
+    $script:CSExecStaging = $null
+    $script:CSExecMount = $null
+    $script:CSExecMountAttached = $false
+    $stageWim = $null
+    $snapshot = @($parts | Sort-Object Offset | ForEach-Object {
+        [pscustomobject]@{
+            PartitionNumber = [int]$_.PartitionNumber
+            Offset = [int64]$_.Offset; Size = [int64]$_.Size
+            GptType = [string]$_.GptType; MbrType = [string]$_.MbrType
+            IsActive = [bool]$_.IsActive
+        }
+    })
+    try {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSExecPreflightTitle + ' ===') -ForegroundColor Cyan
+        Import-Module Dism -ErrorAction Stop
+        Assert-CSInactiveSmallPreflight $disk $c $parts $source $proposal
+        Assert-CSLayoutUnchanged $disk $snapshot
+        $stageWim = Save-CSWim $disk $source
+        $stageHash = Get-CSFileSha256 $stageWim
+        Assert-CSInactiveSmallPreflight $disk $c $parts $source $proposal
+        Assert-CSLayoutUnchanged $disk $snapshot
+        Assert-CSWim $stageWim
+        if ((Get-CSFileSha256 $stageWim) -ne $stageHash) { throw $m.CSExecHashMismatch }
+        $volumeSize = [int64]$script:CSExecCurrentVolumeSize
+        $volumeFree = [int64]$script:CSExecCurrentVolumeFree
+        if ($volumeSize -le 0 -or $volumeFree -lt 0 -or $volumeFree -gt $volumeSize) {
+            throw $m.CSExecSizeCannotMeasure
+        }
+        # Count actual disk usage and NTFS overhead, not only the WIM size.
+        $floor = Align-UpMiB ([int64][math]::Max([double]$script:CSCreateMinimum,
+            [double]($volumeSize - $volumeFree + $script:CSFreeReserve +
+                [math]::Max([int64]0, [int64]$source.Size - $volumeSize) +
+                $script:CSFormatVariation + $script:MiB)))
+        if ([int64]$proposal.NewSize -lt $floor) { throw $m.CSExecRecoveryTooSmall }
+        Write-Host ($m.CSInactiveSmallStaged -f (Format-DetailedSize $proposal.NewSize)) -ForegroundColor Green
+        $question = if ($proposal.Mode -eq 'Right') { $m.CSInactiveSmallConfirmRight }
+            elseif ($proposal.Mode -eq 'BeforeD') { $m.CSInactiveSmallConfirmBeforeD }
+            else { $m.CSInactiveSmallConfirmAdjacent }
+        if (-not (Read-YesNo $question)) {
+            Write-Host $m.CSExecCancelled -ForegroundColor Yellow
+            return
+        }
+        Assert-CSInactiveSmallPreflight $disk $c $parts $source $proposal
+        Assert-CSLayoutUnchanged $disk $snapshot
+        if ((Get-CSFileSha256 $stageWim) -ne $stageHash) { throw $m.CSExecHashMismatch }
+        if ([int64]$proposal.ChangeBytes -lt 0) {
+            if (-not (Test-CSWindowsFilesystemBeforeResize $disk $c $snapshot)) { return }
+        }
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSInactiveSmallApplyingTitle + ' ===') -ForegroundColor Cyan
+        if ($proposal.Mode -eq 'Right') {
+            # Storage may refuse extension of a hidden WinRE partition. A failed
+            # attempt only permits fallback if the entire layout is UNCHANGED.
+            $directSucceeded = $false
+            try {
+                $supported = Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
+                    -PartitionNumber ([int]$source.PartitionNumber) -ErrorAction Stop
+                if ([int64]$supported.SizeMax -ge [int64]$proposal.NewSize) {
+                    $script:CSExecMutated = $true
+                    Resize-Partition -DiskNumber ([int]$disk.Number) `
+                        -PartitionNumber ([int]$source.PartitionNumber) `
+                        -Size ([uint64]$proposal.NewSize) -ErrorAction Stop
+                    $directSucceeded = $true
+                }
+            } catch {
+                # Never fall back after a partially successful Storage call.
+                Assert-CSLayoutUnchanged $disk $snapshot
+                $script:CSExecMutated = $false
+                Write-Host $m.CSInactiveSmallResizeFallback -ForegroundColor Yellow
+            }
+            if ($directSucceeded) {
+                $now = Get-Partition -DiskNumber ([int]$disk.Number) `
+                    -PartitionNumber ([int]$source.PartitionNumber) -ErrorAction Stop
+                if ([int64]$now.Offset -ne [int64]$source.Offset -or
+                    [int64]$now.Size -ne [int64]$proposal.NewSize -or
+                    -not (Test-RecoveryPartition $now ([string]$disk.PartitionStyle))) {
+                    throw $m.CSExecLayoutChanged
+                }
+                # This partition was resized deliberately; all *other* original
+                # partitions must retain their exact geometry and metadata.
+                $unchangedOthers = @($parts | Where-Object {
+                    [int]$_.PartitionNumber -ne [int]$source.PartitionNumber
+                })
+                Assert-CSOtherPartitionsPreserved $disk $unchangedOthers $c
+                Invoke-CSRegisterPreparedRecovery $disk ([int]$now.PartitionNumber) $stageHash $false
+                $script:CSExecLastSucceeded = $true
+                Write-Host $m.CSInactiveSmallFinished -ForegroundColor Green
+                return
+            }
+            Assert-CSLayoutUnchanged $disk $snapshot
+        }
+        if ([int64]$proposal.ChangeBytes -lt 0) {
+            Write-Host $m.CSExecShrinkC
+            $script:CSExecMutated = $true
+            $startedAt = Get-Date
+            try {
+                Invoke-CSResizeWithDiskPartFallback $disk $c $snapshot $source `
+                    ([int64]$proposal.TargetPartitionBytes)
+            } catch {
+                Show-CSShrinkEvents $startedAt
+                $range = Show-CSShrinkLimit $disk $c ([int64]$proposal.TargetPartitionBytes)
+                Show-CSShrinkAdvice $range -EventsInspected
+                throw
+            }
+            Assert-CSAfterCResize $disk $c $source ([int64]$proposal.TargetPartitionBytes) $snapshot
+        }
+        if ($proposal.Mode -ne 'BeforeD') {
+            # Only the exact, previously audited Recovery may be removed.
+            $old = Get-Partition -DiskNumber ([int]$disk.Number) `
+                -PartitionNumber ([int]$source.PartitionNumber) -ErrorAction Stop
+            if ([int64]$old.Offset -ne [int64]$source.Offset -or
+                [int64]$old.Size -ne [int64]$source.Size -or
+                $old.IsBoot -or $old.IsSystem -or $old.IsActive -or $old.DriveLetter -or
+                -not (Test-RecoveryPartition $old ([string]$disk.PartitionStyle))) {
+                throw $m.CSExecLayoutChanged
+            }
+            Write-Host $m.CSInactiveSmallRecreate -ForegroundColor Yellow
+            $script:CSExecMutated = $true
+            Invoke-CSDiskPart @("select disk $($disk.Number)",
+                "select partition $($source.PartitionNumber)", 'delete partition override')
+            if (@(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop |
+                Where-Object { [int64]$_.Offset -eq [int64]$source.Offset }).Count -gt 0) {
+                throw $m.CSExecRecoveryDeleteFailed
+            }
+        } else {
+            # Keep the old Recovery, regardless of its original registration.
+            Assert-CSOtherPartitionsPreserved $disk $parts $c
+        }
+        $newStart = [int64]$proposal.NewStart
+        $newSize = [int64]$proposal.NewSize
+        if ($proposal.Mode -eq 'Right' -and $newStart -ne [int64]$source.Offset) {
+            throw $m.CSExecLayoutChanged
+        }
+        $nowC = Get-Partition -DriveLetter C -ErrorAction Stop
+        if ([int64]$nowC.Offset -ne [int64]$c.Offset -or
+            [int64]$nowC.Size -ne [int64]$proposal.TargetPartitionBytes) {
+            throw $m.CSExecCMismatch
+        }
+        if ($proposal.Mode -ne 'Right' -and (Align-UpMiB (Get-PartitionEnd $nowC)) -ne $newStart) {
+            throw $m.CSExecLayoutChanged
+        }
+        foreach ($other in @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop)) {
+            if ([int64]$other.Offset -lt ($newStart + $newSize) -and
+                (Get-PartitionEnd $other) -gt $newStart) { throw $m.CSNewNextPartitionProtected }
+        }
+        Write-Host $m.CSExecCreateRecovery
+        $script:CSExecMutated = $true
+        $isMbr = [string]$disk.PartitionStyle -eq 'MBR'
+        $created = if ($isMbr) {
+            New-Partition -DiskNumber ([int]$disk.Number) -Offset ([uint64]$newStart) `
+                -Size ([uint64]$newSize) -MbrType IFS -ErrorAction Stop
+        } else {
+            New-Partition -DiskNumber ([int]$disk.Number) -Offset ([uint64]$newStart) `
+                -Size ([uint64]$newSize) `
+                -GptType '{EBD0A0A2-B9E5-4433-87C0-68B6B72699C7}' -ErrorAction Stop
+        }
+        $newNumber = [int]$created.PartitionNumber
+        $newP = Get-Partition -DiskNumber ([int]$disk.Number) -PartitionNumber $newNumber -ErrorAction Stop
+        if ([int64]$newP.Offset -ne $newStart -or
+            [int64]$newP.Size -ne $newSize -or
+            $newP.IsBoot -or $newP.IsSystem -or $newP.IsActive -or $newP.DriveLetter) {
+            throw $m.CSExecNewRecoveryMismatch
+        }
+        $preserve = @($parts | Where-Object {
+            $proposal.Mode -eq 'BeforeD' -or
+            [int]$_.PartitionNumber -ne [int]$source.PartitionNumber
+        })
+        Assert-CSOtherPartitionsPreserved $disk $preserve $c
+        Format-Volume -Partition $newP -FileSystem NTFS -NewFileSystemLabel 'Windows RE tools' `
+            -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        if (-not $isMbr) { Set-CSRecoveryType $disk $newNumber }
+        Invoke-CSRegisterPreparedRecovery $disk $newNumber $stageHash $true
+        if ($isMbr) { Set-CSRecoveryType $disk $newNumber }
+        $finalP = Get-Partition -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber $newNumber -ErrorAction Stop
+        if (-not (Test-RecoveryPartition $finalP ([string]$disk.PartitionStyle))) {
+            throw $m.CSExecRecoveryTypeFailed
+        }
+        $vol = Get-Volume -Partition $finalP -ErrorAction Stop
+        if ([int64]$vol.SizeRemaining -lt $script:CSFreeReserve) { throw $m.CSExecRecoveryTooSmall }
+        Assert-CSOtherPartitionsPreserved $disk $preserve $c
+        $script:CSExecLastSucceeded = $true
+        Write-Host $m.CSInactiveSmallFinished -ForegroundColor Green
+        if ($proposal.KeepOld) { Write-Host $m.CSInactiveSmallOldKept -ForegroundColor Yellow }
+    } catch {
+        $script:CSExecErrorReportedMessage = $_.Exception.Message
+        Write-Host ($m.CSExecError -f $_.Exception.Message) -ForegroundColor Red
+        if ($script:CSExecMutated) {
+            Write-Host $m.CSExecManualRecovery -ForegroundColor Yellow
+            if ($stageWim) { Write-Host ($m.CSExecStagedAt -f $stageWim) -ForegroundColor Yellow }
+        }
+        throw
+    } finally {
+        if ($script:CSExecMount) {
+            try { Close-CSRecoveryMount ([int]$disk.Number) }
+            catch { Write-Warning $m.CSExecMountRetained }
+        }
+        Show-CSTemporaryCleanupResult $false
+    }
+}

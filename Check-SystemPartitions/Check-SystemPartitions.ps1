@@ -726,12 +726,57 @@ try {
         return
     }
 
+    # A too-small inactive Recovery must not be registered in place. First
+    # prefer its right-side free space, then a guarded C: shrink. If D: sits
+    # between C: and the old Recovery, create a NEW Recovery before D: and
+    # retain the old partition for a later, separately audited cleanup.
+    if ($null -ne $inactiveRecovery -and $assessment.Verified -and
+        $null -ne $assessment.Existing -and
+        -not (Test-CSInactiveRecoveryReady $disk $inactiveRecovery $assessment)) {
+        $smallPlan = Get-CSInactiveSmallRecoveryPlan $disk $c $parts $reInfo `
+            $inactiveRecovery $assessment $usableBounds
+        if ($null -ne $smallPlan) {
+            Write-Host ''
+            Write-Host ('=== ' + $m.CSProposedPlanTitle + ' ===') -ForegroundColor Cyan
+            if ($smallPlan.Mode -eq 'Right') {
+                Write-Host ($m.CSInactiveSmallRight -f $inactiveRecovery.PartitionNumber,
+                    (Format-DetailedSize $smallPlan.NewSize))
+            } elseif ($smallPlan.Mode -eq 'Adjacent') {
+                Write-Host ($m.CSInactiveSmallAdjacent -f $inactiveRecovery.PartitionNumber,
+                    (Format-DetailedSize $smallPlan.NewSize))
+            } else {
+                Write-Host ($m.CSInactiveSmallBeforeD -f
+                    (Format-DetailedSize $smallPlan.NewSize))
+                Write-Host $m.CSInactiveSmallOldKept -ForegroundColor Yellow
+            }
+            if ([int64]$smallPlan.ChangeBytes -lt 0) {
+                Write-Host ($m.CSInactiveSmallShrink -f
+                    (Format-DetailedSize ([int64][math]::Abs($smallPlan.ChangeBytes))))
+            }
+            Invoke-CSRepairSmallInactiveRecovery $disk $c $parts $reInfo `
+                $inactiveRecovery $smallPlan
+            if ($script:CSExecLastSucceeded) {
+                Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c -CleanupAudits @()
+                $script:CSStagingCleanupAllowed = $true
+            }
+            $script:CSRunHandled = $true
+            return
+        }
+        Write-Host $m.CSInactiveSmallNoSafePlan -ForegroundColor Yellow
+    }
+
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false
-    $candidates = @($rows | Where-Object {
-        (Test-DeletionCandidate $_) -and
-        -not (-not $reInfo.Enabled -and $_.Kind -eq 'RecoveryOther')
-    })
+    $candidates = if ($null -ne $inactiveRecovery) {
+        # Do not offer ANY partition deletion while inactive WinRE has an
+        # unresolved source, insufficient capacity, or a pending repair.
+        @()
+    } else {
+        @($rows | Where-Object {
+            (Test-DeletionCandidate $_) -and
+            -not (-not $reInfo.Enabled -and $_.Kind -eq 'RecoveryOther')
+        })
+    }
     # Inspect every suspicious partition BEFORE it can be selected.
     # The audit is read-only. A partition with unknown/OEM contents is blocked
     # from optional deletion, even when the user selects it for simulation.

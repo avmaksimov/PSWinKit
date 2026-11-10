@@ -505,3 +505,116 @@ function Get-CSMissingMBRPlan($disk, $c, $parts, $reInfo, $assessment, $volume, 
         Geometry = $geometry
     }
 }
+
+
+# Small, *inactive* Recovery: prefer extending into free space on the right.
+# If that cannot satisfy the minimum, plan a rebuild using space from C:.
+# A data partition between C: and the old Recovery is NEVER moved: a new
+# Recovery can be created after a shrink of C:, leaving the old one untouched.
+# Planning is strictly read-only, including Get-PartitionSupportedSize.
+function Get-CSInactiveSmallRecoveryPlan($disk, $c, $parts, $reInfo, $candidate, $assessment, $bounds) {
+    if ($null -eq $candidate -or $null -eq $assessment -or
+        -not $assessment.Verified -or $null -eq $assessment.Existing -or
+        [int]$assessment.Existing.DiskNumber -ne [int]$disk.Number -or
+        [int]$assessment.Existing.PartitionNumber -ne [int]$candidate.PartitionNumber -or
+        $null -eq $assessment.MinRecoveryBytes -or
+        [string]$disk.PartitionStyle -notin @('GPT','MBR') -or
+        $null -eq $bounds -or $reInfo.Enabled -or
+        [int]$candidate.DiskNumber -ne [int]$disk.Number -or
+        [int64]$candidate.Offset -lt (Get-PartitionEnd $c)) { return $null }
+    if (Test-CSInactiveRecoveryReady $disk $candidate $assessment) { return $null }
+    if ($disk.IsOffline -or $disk.IsReadOnly -or -not $disk.IsBoot -or
+        $candidate.IsSystem -or $candidate.IsBoot -or $candidate.IsActive -or
+        $candidate.DriveLetter) { return $null }
+    $volume = Get-Volume -DriveLetter C -ErrorAction Stop
+    if ([string]$volume.FileSystem -ne 'NTFS') { return $null }
+    if ([string]$disk.PartitionStyle -eq 'GPT') {
+        if ((Get-GptId $c) -ne 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') { return $null }
+    } elseif ([string]$c.Type -ne 'IFS' -or [int64]$disk.Size -ge 2TB) { return $null }
+
+    $minimum = Align-UpMiB ([int64][math]::Max(
+        [double]$script:CSCreateMinimum, [double]$assessment.MinRecoveryBytes))
+    $preferred = Align-UpMiB ([int64]($minimum + 512MB))
+    $end = Get-PartitionEnd $candidate
+    $right = @($parts | Where-Object {
+        [int]$_.PartitionNumber -ne [int]$candidate.PartitionNumber -and
+        [int64]$_.Offset -ge $end
+    } | Sort-Object Offset)
+    $rightLimit = if ($right.Count -gt 0) { [int64]$right[0].Offset } else { [int64]$bounds.End }
+    $rightLimit = [int64][math]::Min([double]$rightLimit, [double]$bounds.End)
+    if ($rightLimit -lt $end) { return $null }
+    $rightCapacity = Align-DownMiB ([int64]($rightLimit - [int64]$candidate.Offset))
+    # Avoid an unnecessary change to C: whenever right-side space is enough.
+    if ($rightCapacity -ge $minimum -and $rightCapacity -gt [int64]$candidate.Size) {
+        $rightSize = [int64][math]::Min([double]$preferred, [double]$rightCapacity)
+        return [pscustomobject]@{
+            Mode = 'Right'; TargetPartitionBytes = [int64]$c.Size
+            ChangeBytes = [int64]0; NewStart = [int64]$candidate.Offset
+            NewSize = $rightSize; MinimumRecoveryBytes = $minimum
+            OldNumber = [int]$candidate.PartitionNumber; KeepOld = $false
+            RightEnd = $rightLimit
+        }
+    }
+
+    # Shrinking C: does not touch the next partition. Only very simple
+    # topologies are eligible, with an image verified on this physical disk.
+    $between = @($parts | Where-Object {
+        [int]$_.PartitionNumber -ne [int]$c.PartitionNumber -and
+        [int]$_.PartitionNumber -ne [int]$candidate.PartitionNumber -and
+        [int64]$_.Offset -ge (Get-PartitionEnd $c) -and
+        [int64]$_.Offset -lt [int64]$candidate.Offset
+    } | Sort-Object Offset)
+    $mode = ''
+    $boundary = [int64]0
+    if ($between.Count -eq 0) {
+        $mode = 'Adjacent'
+        $boundary = $rightLimit
+    } elseif ($between.Count -eq 1 -and
+        [string]$between[0].DriveLetter -eq 'D' -and
+        -not $between[0].IsBoot -and -not $between[0].IsSystem -and
+        -not $between[0].IsActive -and
+        [string]$between[0].Type -notmatch '(?i)Extended|Logical|Unknown|OEM') {
+        $mode = 'BeforeD'
+        $boundary = [int64]$between[0].Offset
+    } else { return $null }
+    if ($mode -eq 'BeforeD' -and [string]$disk.PartitionStyle -eq 'MBR') {
+        if ($parts.Count -ge 4 -or @($parts | Where-Object {
+            [string]$_.Type -match '(?i)Extended|Logical|Unknown' -and
+            -not (Test-RecoveryPartition $_ 'MBR')
+        }).Count -gt 0) { return $null }
+    }
+    if ($mode -eq 'Adjacent' -and [string]$disk.PartitionStyle -eq 'MBR' -and
+        @($parts | Where-Object {
+            [string]$_.Type -match '(?i)Extended|Logical|Unknown' -and
+            -not (Test-RecoveryPartition $_ 'MBR')
+        }).Count -gt 0) { return $null }
+    $supported = try {
+        Get-PartitionSupportedSize -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$c.PartitionNumber) -ErrorAction Stop
+    } catch { return $null }
+    # Reserve a MiB so NTFS/partition rounding cannot undercut SizeMin.
+    $smallestC = Align-UpMiB ([int64]$supported.SizeMin + 1MB)
+    if ($smallestC -gt [int64]$c.Size) { return $null }
+    $maximumCapacity = [int64]($boundary - (Align-UpMiB ([int64]$c.Offset + $smallestC)))
+    if ($maximumCapacity -lt $minimum) { return $null }
+    $targetSize = Align-DownMiB ([int64][math]::Min([double]$preferred, [double]$maximumCapacity))
+    $targetC = Align-DownMiB ([int64]($boundary - $targetSize - [int64]$c.Offset))
+    if ($targetC -gt [int64]$c.Size) { $targetC = [int64]$c.Size }
+    if ($targetC -lt $smallestC) { $targetC = $smallestC }
+    $newStart = Align-UpMiB ([int64]$c.Offset + $targetC)
+    $newSize = [int64]($boundary - $newStart)
+    if ($newSize -gt $preferred) { $newSize = $preferred }
+    $newSize = Align-DownMiB $newSize
+    if ($newSize -lt $minimum -or $targetC -le 0 -or
+        $targetC -gt [int64]$c.Size -or
+        [int64]$newStart + $newSize -gt $boundary) { return $null }
+    return [pscustomobject]@{
+        Mode = $mode; TargetPartitionBytes = $targetC
+        ChangeBytes = [int64]($targetC - [int64]$c.Size)
+        NewStart = $newStart; NewSize = $newSize
+        MinimumRecoveryBytes = $minimum
+        OldNumber = [int]$candidate.PartitionNumber
+        KeepOld = [bool]($mode -eq 'BeforeD')
+        RightEnd = $boundary
+    }
+}
