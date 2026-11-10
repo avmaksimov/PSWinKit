@@ -136,7 +136,6 @@
         CheckingFileSystemOn = "Проверка файловой системы {0}..."
         RepairVolumeReturnedAn = 'Repair-Volume вернул пустой или неоднозначный результат.'
         TheFileSystemIs = 'Файловая система исправна.'
-        TheVolumeNeedsRepair = 'Тому требуется исправление или дополнительная проверка: '
         VolumeSpotFixNeeded = 'Файловой системе требуется точечное исправление ошибок.'
         VolumeOfflineFixNeeded = 'Файловой системе требуется автономная проверка с исправлением.'
         VolumeScanNeeded = 'Файловой системе требуется дополнительное сканирование.'
@@ -220,7 +219,6 @@
         RetryUsingISOCanceled = 'Повторное восстановление с ISO отменено. Исходная ошибка DISM сохраняется.'
         CheckingSystemFilesSFC = "Проверка системных файлов: SFC /scannow"
         SUMMARY = '====================== ИТОГ ======================'
-        SystemVolume = 'Системный том: '
         RepairScheduledAtStartup = 'Исправление запланировано при загрузке.'
         DISMNotRunOr = 'DISM: не запускался или восстановление отменено.'
         SFCNotRun = 'SFC: не запускался.'

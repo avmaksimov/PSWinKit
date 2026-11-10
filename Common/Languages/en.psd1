@@ -136,7 +136,6 @@
         CheckingFileSystemOn = "Checking file system on {0}..."
         RepairVolumeReturnedAn = 'Repair-Volume returned an empty or ambiguous result.'
         TheFileSystemIs = 'The file system is healthy.'
-        TheVolumeNeedsRepair = 'The volume needs repair or further checking: '
         VolumeSpotFixNeeded = 'The file system requires a spot repair.'
         VolumeOfflineFixNeeded = 'The file system requires an offline scan and repair.'
         VolumeScanNeeded = 'The file system needs additional scanning.'
@@ -220,7 +219,6 @@
         RetryUsingISOCanceled = 'Retry using ISO canceled. The original DISM error remains.'
         CheckingSystemFilesSFC = "Checking system files: SFC /scannow"
         SUMMARY = '====================== SUMMARY ======================'
-        SystemVolume = 'System volume: '
         RepairScheduledAtStartup = 'Repair scheduled at startup.'
         DISMNotRunOr = 'DISM: not run, or repair canceled.'
         SFCNotRun = 'SFC: not run.'
