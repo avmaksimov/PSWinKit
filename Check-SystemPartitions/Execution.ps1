@@ -69,6 +69,53 @@ function Invoke-CSCleanupStaging {
     Write-Host ($m.CS27OldStageDeleted -f $dirs.Count) -ForegroundColor DarkGray
 }
 
+function Show-CSExistingStages {
+    $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
+    if (-not [IO.Directory]::Exists($base)) {
+        Write-Host $m.CSStageNone -ForegroundColor DarkGray
+        return
+    }
+    $root = Get-Item -LiteralPath $base -Force -ErrorAction Stop
+    if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        Write-Warning $m.CS27CleanupUnsafeRoot
+        return
+    }
+    $dirs = @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop |
+        Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' } |
+        Sort-Object CreationTime)
+    if ($dirs.Count -eq 0) {
+        Write-Host $m.CSStageNone -ForegroundColor DarkGray
+        return
+    }
+    Write-Host ''
+    Write-Host ('=== ' + $m.CS27OldStageTitle + ' ===') -ForegroundColor Cyan
+    Write-Host ($m.CSOldStageLocation -f $base) -ForegroundColor DarkGray
+    $entries = @(
+        foreach ($dir in $dirs) {
+            $displaySize = $m.CS27OldStageSizeUnknown
+            if (Test-CSStagingTreeSafe $dir.FullName) {
+                try { $displaySize = Format-DetailedSize (Get-CSStagingTreeSize $dir.FullName) }
+                catch { }
+            }
+            [pscustomobject]@{
+                Folder = $dir.Name
+                Created = $dir.CreationTime.ToString('g', [Globalization.CultureInfo]::CurrentCulture)
+                Size = [string]$displaySize
+            }
+        }
+    )
+    $folderWidth = [math]::Max(38, [int]$m.CSOldStageColumnFolder.Length)
+    $dateWidth = [math]::Max(19, [int]$m.CSOldStageColumnCreated.Length)
+    $sizeWidth = [math]::Max(10, [int]$m.CSOldStageColumnSize.Length)
+    $format = '{0,-' + $folderWidth + '}  {1,-' + $dateWidth + '}  {2,' + $sizeWidth + '}'
+    Write-Host ($format -f $m.CSOldStageColumnFolder, $m.CSOldStageColumnCreated, $m.CSOldStageColumnSize)
+    Write-Host ($format -f ('-' * $folderWidth), ('-' * $dateWidth), ('-' * $sizeWidth))
+    foreach ($entry in $entries) {
+        Write-Host ($format -f $entry.Folder, $entry.Created, $entry.Size)
+    }
+    Write-Host $m.CS27OldStageWillCleanup -ForegroundColor DarkGray
+}
+
 function Show-CSPreservedStages {
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
     if (-not [IO.Directory]::Exists($base)) { return }

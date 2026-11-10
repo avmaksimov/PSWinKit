@@ -171,13 +171,26 @@ function Add-FreeRow($records, [int64]$start, [int64]$end) {
 }
 function Get-GptId($part) { return ([string]$part.GptType).Trim('{}').ToUpperInvariant() }
 function Test-RecoveryPartition($part, [string]$style) {
+    if ($null -eq $part) { return $false }
     if ($style -eq 'GPT') { return ((Get-GptId $part) -eq $script:RecoveryGuid) }
-    if ($style -ne 'MBR' -or $null -eq $part -or
-        -not $part.PSObject.Properties['MbrType'] -or $null -eq $part.MbrType) {
-        return $false
+    if ($style -ne 'MBR') { return $false }
+
+    # Some MSFT_Partition adapters expose MbrType through an adapted property,
+    # which is not necessarily present in PSObject.Properties['MbrType'].
+    # Read the value directly: 39 (decimal) is the MBR Recovery ID 0x27.
+    $mbr = $null
+    try { $mbr = $part.MbrType } catch { }
+    if ($null -ne $mbr -and -not [string]::IsNullOrWhiteSpace([string]$mbr)) {
+        $text = ([string]$mbr).Trim()
+        if ($text -match '^(?i:Recovery|0x27)$') { return $true }
+        try {
+            return ([uint16]::Parse($text, [System.Globalization.NumberStyles]::Integer,
+                [System.Globalization.CultureInfo]::InvariantCulture) -eq [uint16]39)
+        } catch { return $false }
     }
-    # Windows Storage may report Type=Unknown while MbrType=39 (0x27).
-    return ([uint16]$part.MbrType -eq [uint16]0x27)
+    # Fallback only when the Storage adapter does not expose MbrType.
+    # Never override a known, non-Recovery MBR ID by a friendly Type label.
+    return (([string]$part.Type).Trim() -match '^(?i:Recovery|0x27)$')
 }
 function Get-WinReSnapshot {
     # Run REAgentC directly. A UNC working directory is safe here and native
@@ -591,6 +604,11 @@ try {
         $script:CSRunHandled = $true
         return
     }
+    # Show previous rescue stages even when the subsequent WinRE assessment
+    # fails. No removal or deletion confirmation is offered before verification.
+    try { Show-CSExistingStages }
+    catch { Write-Warning $_.Exception.Message }
+
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
     Write-Host ''
