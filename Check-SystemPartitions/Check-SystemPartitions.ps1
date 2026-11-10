@@ -587,9 +587,6 @@ try {
         $script:CSRunHandled = $true
         return
     }
-    # Cleanup is separately confirmed; do not offer it while a reboot is pending.
-    Invoke-CSOfferOldStagingCleanup -WinReEnabled:([bool]$reInfo.Enabled)
-
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
     Write-Host ''
@@ -891,10 +888,11 @@ try {
     })
     # Never begin mutation if any selected optional deletion failed its audit.
     $invalid = @($selectedAudits | Where-Object { -not $_.Permitted })
+    $coreSucceeded = $false
+    $finalReadbackSucceeded = $false
     if ($selectedAudits.Count -ne $selected.Count -or $invalid.Count -gt 0) {
         Write-Host $m.CS28BlockedExecutionSelection -ForegroundColor Red
     } else {
-        $coreSucceeded = $false
         if ($optimiseC) {
             if ($null -eq $activeRecovery) {
                 Invoke-CSCreateMissingRecovery -Disk $disk -C $c -Parts $parts `
@@ -921,25 +919,31 @@ try {
             try {
                 Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
                     -CleanupAudits $selectedAudits
+                $finalReadbackSucceeded = $true
             } catch {
                 Write-Warning ($m.CSFinalReadbackFailed -f $_.Exception.Message)
             }
-            # Old rescue stages were shown but retained while WinRE was disabled.
-            # Offer cleanup after a successful repair, never without confirmation.
-            if ($optimiseC -and -not $reInfo.Enabled) {
-                try {
-                    $repairedRE = Get-WinReSnapshot
-                    if ($repairedRE.Enabled -and
-                        $null -ne $repairedRE.DiskNumber -and
-                        $null -ne $repairedRE.PartitionNumber -and
-                        [int]$repairedRE.DiskNumber -eq [int]$disk.Number) {
-                        Invoke-CSOfferOldStagingCleanup -WinReEnabled
-                    }
-                } catch {
-                    if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
-                    Write-Warning $_.Exception.Message
-                }
+        }
+    }
+    # Offer removal of previous rescue stages ONLY at normal exit. Never
+    # offer it after execution failure, aborted disk changes, failed readback,
+    # or rejected optional-deletion audits. A no-change diagnostic run also
+    # qualifies if the source WIM was verified and WinRE is still enabled.
+    $anySelectedAction = ($optimiseC -or $selectedAudits.Count -gt 0)
+    $normalCompletion = ($selectedAudits.Count -eq $selected.Count -and
+        $invalid.Count -eq 0 -and $assessment.Verified -and
+        (-not $anySelectedAction -or ($coreSucceeded -and $finalReadbackSucceeded)))
+    if ($normalCompletion) {
+        try {
+            $finalRE = Get-WinReSnapshot
+            if ($finalRE.Enabled -and $null -ne $finalRE.DiskNumber -and
+                $null -ne $finalRE.PartitionNumber -and
+                [int]$finalRE.DiskNumber -eq [int]$disk.Number) {
+                Invoke-CSOfferOldStagingCleanup -WinReEnabled
             }
+        } catch {
+            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+            Write-Warning $_.Exception.Message
         }
     }
     $script:CSRunHandled = $true
