@@ -373,15 +373,6 @@ function Get-CSInactiveRecoveryAssessment($disk, $c, $parts, $reInfo, $candidate
         [int]$result.Existing.DiskNumber -eq [int]$disk.Number) {
         $result.Source = $m.CSInactiveRecoverySource -f $candidate.PartitionNumber
     }
-    if (-not $result.Verified -or $null -eq $result.Existing -or
-        [int]$result.Existing.PartitionNumber -ne [int]$candidate.PartitionNumber -or
-        [int]$result.Existing.DiskNumber -ne [int]$disk.Number -or
-        $null -eq $result.FreeBytes -or
-        [int64]$result.FreeBytes -lt $script:CSFreeReserve -or
-        $null -eq $result.MinRecoveryBytes -or
-        [int64]$candidate.Size -lt [int64]$result.MinRecoveryBytes) {
-        return $result
-    }
     return $result
 }
 

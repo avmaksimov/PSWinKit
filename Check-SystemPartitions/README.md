@@ -11,7 +11,7 @@
 - When WinRE is disabled, can register a **validated image on an existing Recovery partition** without repartitioning, but only on the **same physical disk as Windows**, with enough partition capacity and free space. These conditions are rechecked before enabling WinRE.
 - Supports creation of a missing Recovery on GPT and constrained MBR scenarios: migrating working WinRE from C: to a new Recovery partition, or creating Recovery for disabled WinRE when the disk layout meets all safety checks.
 - For an undersized Recovery with disabled WinRE, first uses space on the **right**: attempts expansion and, if Windows rejects it with no layout changes, rebuilds in place **only after verified image/settings backup**. If right-side space is insufficient and Recovery immediately follows C:, the tool can shrink C: and rebuild Recovery.
-- For **C: → D: → Recovery**, when right-side space cannot accommodate WinRE, the tool can shrink **C: only** and create a new Recovery **before D:**. Both D: and the old Recovery remain untouched until the new WinRE has been verified; removing the old Recovery is a separate, confirmed operation.
+- For **C: → D: → Recovery**, when right-side space cannot accommodate WinRE, the tool can shrink **C: only** and create a new Recovery **before D:**. Both D: and the old Recovery remain untouched until the new WinRE has been verified; on GPT, the script can offer to remove the old Recovery **in the same run**, but only after the new WinRE is verified and the old partition passes a separate safety audit and confirmations. On MBR the old partition remains.
 
 - Audits potentially obsolete system and Recovery partitions. Deletion is offered only after checking contents and boot dependencies; each deletion requires separate confirmation.
 - Where feasible, **aligns the C: capacity displayed in File Explorer to a multiple of 10 GiB** (for example, 130 or 140 GiB). A purely cosmetic adjustment is limited to **256 MiB** and must not compromise the Recovery free-space requirement. Fixing an undersized Recovery takes priority over a round number.
@@ -26,7 +26,7 @@ From the PSWinKit root in Windows PowerShell 5.1:
 .\Check-SystemPartitions\Check-SystemPartitions.ps1
 ```
 
-No required parameters. The interactive workflow is: diagnose → propose changes → validate → confirm individual operations → execute → summarize actual results. If no changes are needed, the tool exits without repartitioning.
+No required parameters. The interactive workflow is: diagnose and show the current partition table → select operations → preview the proposed layout in the same table format → validate → confirm → execute → verify and optionally clean up an obsolete Recovery (GPT only after a separate audit). If no changes are needed, the tool exits without repartitioning.
 
 ## Module responsibilities
 

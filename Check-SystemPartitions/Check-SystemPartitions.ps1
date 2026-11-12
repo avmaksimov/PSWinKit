@@ -475,6 +475,66 @@ function New-ProjectedLayout($parts, $c, $activeRecovery, [int64]$plannedCSize, 
     }
     return @($view.ToArray() | Sort-Object Offset)
 }
+# Hypothetical Recovery for the shared before/after partition table. The new
+# partition has no number yet; this function never changes the live disk.
+function New-CSProjectedRecovery($disk, [int64]$start, [int64]$size) {
+    return [pscustomobject]@{
+        PartitionNumber = 0; Offset = $start; Size = $size; DriveLetter = $null
+        Type = 'Recovery'
+        GptType = if ([string]$disk.PartitionStyle -eq 'GPT') {
+            '{' + $script:RecoveryGuid + '}'
+        } else { '' }
+        MbrType = if ([string]$disk.PartitionStyle -eq 'MBR') { [uint16]0x27 } else { $null }
+        IsBoot = $false; IsSystem = $false; IsActive = $false
+    }
+}
+
+# Reuse New-ProjectedLayout/New-PartitionRows/Show-Partitions instead of a
+# second text-only plan UI for an inactive, undersized Recovery.
+function Show-CSInactiveSmallPreview($disk, $c, $parts, $source, $proposal,
+    $reInfo, $bounds, $volumeSizes) {
+    $excluded = if ($proposal.Mode -eq 'Adjacent') {
+        @([int]$source.PartitionNumber)
+    } else { @() }
+    $editedRecovery = if ($proposal.Mode -eq 'Right') { $source } else { $null }
+    $geometry = if ($proposal.Mode -eq 'Right') { $proposal } else { $null }
+    $view = @(New-ProjectedLayout $parts $c $editedRecovery `
+        ([int64]$proposal.TargetPartitionBytes) $geometry $excluded)
+    if ($proposal.Mode -ne 'Right') {
+        $view = @($view + @(New-CSProjectedRecovery $disk `
+            ([int64]$proposal.NewStart) ([int64]$proposal.NewSize)) | Sort-Object Offset)
+    }
+    $cView = @($view | Where-Object {
+        [int]$_.PartitionNumber -eq [int]$c.PartitionNumber
+    })
+    if ($cView.Count -ne 1) { throw $m.CSExecLayoutChanged }
+    $sizes = @{}
+    foreach ($key in $volumeSizes.Keys) { $sizes[$key] = [int64]$volumeSizes[$key] }
+    $cKey = [string]$c.PartitionNumber
+    if ($sizes.ContainsKey($cKey)) {
+        $sizes[$cKey] = [int64]($sizes[$cKey] +
+            [int64]$proposal.TargetPartitionBytes - [int64]$c.Size)
+    }
+    # Estimated NTFS volume size, not a promise about the live filesystem.
+    # A recreated Recovery is left unmeasured; show its partition size only.
+    $sizes.Remove([string]$source.PartitionNumber) | Out-Null
+    $rows = @(New-PartitionRows $disk $cView[0] $view $reInfo `
+        (Get-PreviewBounds $bounds $parts) $sizes)
+    foreach ($row in $rows) {
+        if ($row.Kind -eq 'RecoveryOther' -and [int]$row.PartitionNumber -eq 0) {
+            $row.Number = '+'
+            $row.Role = $m.CS26NewRecovery
+            $row.Recommendation = ''
+        } elseif ($row.Kind -eq 'RecoveryOther' -and
+            [int]$row.PartitionNumber -eq [int]$source.PartitionNumber) {
+            $row.Role = $m.CSInactiveRecoveryRole
+            $row.Recommendation = ''
+        }
+    }
+    Show-Partitions $rows $m.CSSimulationLayoutTitle $false
+    Write-Host $m.CSSimulationLayoutNotice -ForegroundColor Yellow
+}
+
 function Get-PreviewBounds($usableBounds, $originalParts) {
     if ($null -ne $usableBounds) { return $usableBounds }
     # Even if the GPT ioctl fails, locations that were occupied by known
@@ -737,6 +797,13 @@ try {
             $inactiveRecovery $assessment $usableBounds
         if ($null -ne $smallPlan) {
             Write-Host ''
+            Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
+            if (-not (Read-YesNo $m.CSInactiveSmallSelect)) {
+                Write-Host $m.CSExecCancelled -ForegroundColor Yellow
+                $script:CSRunHandled = $true
+                return
+            }
+            Write-Host ''
             Write-Host ('=== ' + $m.CSProposedPlanTitle + ' ===') -ForegroundColor Cyan
             if ($smallPlan.Mode -eq 'Right') {
                 Write-Host ($m.CSInactiveSmallRight -f $inactiveRecovery.PartitionNumber,
@@ -747,16 +814,96 @@ try {
             } else {
                 Write-Host ($m.CSInactiveSmallBeforeD -f
                     (Format-DetailedSize $smallPlan.NewSize))
-                Write-Host $m.CSInactiveSmallOldKept -ForegroundColor Yellow
             }
             if ([int64]$smallPlan.ChangeBytes -lt 0) {
                 Write-Host ($m.CSInactiveSmallShrink -f
                     (Format-DetailedSize ([int64][math]::Abs($smallPlan.ChangeBytes))))
             }
+            if ($smallPlan.Mode -eq 'BeforeD') {
+                if ([string]$disk.PartitionStyle -eq 'GPT') {
+                    Write-Host $m.CSInactiveSmallCleanupOffer -ForegroundColor Yellow
+                } else {
+                    Write-Host $m.CSInactiveSmallCleanupMBR -ForegroundColor Yellow
+                }
+            }
+            Write-Host $m.CSPlanReValidation -ForegroundColor Yellow
+            Write-Host $m.CSPreviewCalculating -ForegroundColor DarkGray
+            Show-CSInactiveSmallPreview $disk $c $parts $inactiveRecovery `
+                $smallPlan $reInfo $usableBounds $volumeSizes
             Invoke-CSRepairSmallInactiveRecovery $disk $c $parts $reInfo `
                 $inactiveRecovery $smallPlan
             if ($script:CSExecLastSucceeded) {
-                Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c -CleanupAudits @()
+                $oldAudits = @()
+                # An obsolete Recovery can be audited only AFTER the new WinRE
+                # has passed registration/size checks. Cleanup is independently
+                # optional; the initial simulated table keeps the old partition.
+                if ($smallPlan.Mode -eq 'BeforeD' -and
+                    [string]$disk.PartitionStyle -eq 'GPT') {
+                    Write-Host ''
+                    Write-Host ('=== ' + $m.CS28AuditTitle + ' ===') -ForegroundColor Cyan
+                    $liveDisk = Get-Disk -Number ([int]$disk.Number) -ErrorAction Stop
+                    if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId) {
+                        throw $m.CSExecLayoutChanged
+                    }
+                    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+                    $liveRE = Get-WinReSnapshot
+                    if (-not $liveRE.Enabled -or
+                        [int]$liveRE.DiskNumber -ne [int]$disk.Number -or
+                        $null -eq $liveRE.PartitionNumber) {
+                        throw $m.CSExecWinRENotRegistered
+                    }
+                    $newPart = Get-Partition -DiskNumber ([int]$disk.Number) `
+                        -PartitionNumber ([int]$liveRE.PartitionNumber) -ErrorAction Stop
+                    if (-not (Test-RecoveryPartition $newPart 'GPT') -or
+                        [int64]$newPart.Offset -eq [int64]$inactiveRecovery.Offset -or
+                        [string]$newPart.Guid -eq [string]$inactiveRecovery.Guid) {
+                        throw $m.CSExecWinRENotRegistered
+                    }
+                    $newVolume = Get-Volume -Partition $newPart -ErrorAction Stop
+                    if ([int64]$newVolume.SizeRemaining -lt $script:CSFreeReserve) {
+                        throw $m.CSExecRecoveryTooSmall
+                    }
+                    $oldParts = @(Get-Partition -DiskNumber ([int]$disk.Number) `
+                        -ErrorAction Stop | Where-Object {
+                            [int64]$_.Offset -eq [int64]$inactiveRecovery.Offset -and
+                            [int64]$_.Size -eq [int64]$inactiveRecovery.Size -and
+                            [string]$_.Guid -eq [string]$inactiveRecovery.Guid
+                        })
+                    if ($oldParts.Count -ne 1) { throw $m.CSExecLayoutChanged }
+                    $audit = Get-CSCleanupCandidateAudit $liveDisk $liveC `
+                        $oldParts[0] 'RecoveryOther' $liveRE
+                    Show-CSCleanupCandidateAudit $audit
+                    if ($audit.Permitted) {
+                        $oldAudits = @($audit)
+                        Write-Host $m.CSInactiveSmallCleanupSeparate -ForegroundColor Yellow
+                        Invoke-CSOptionalPartitionDeletion -disk $liveDisk -c $liveC `
+                            -audits $oldAudits -BackupAlreadyConfirmed
+                    } else {
+                        Write-Host $m.CSInactiveSmallCleanupBlocked -ForegroundColor Yellow
+                    }
+                } elseif ($smallPlan.Mode -eq 'BeforeD') {
+                    Write-Host $m.CSInactiveSmallCleanupMBR -ForegroundColor Yellow
+                }
+                Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
+                    -CleanupAudits $oldAudits
+                # Final success (and removal of rescue files) requires a real,
+                # enabled WinRE on this physical disk, not merely a printed table.
+                $verifiedRE = Get-WinReSnapshot
+                if (-not $verifiedRE.Enabled -or
+                    $null -eq $verifiedRE.DiskNumber -or
+                    $null -eq $verifiedRE.PartitionNumber -or
+                    [int]$verifiedRE.DiskNumber -ne [int]$disk.Number) {
+                    throw $m.CSExecWinRENotRegistered
+                }
+                $verifiedPartition = Get-Partition -DiskNumber ([int]$disk.Number) `
+                    -PartitionNumber ([int]$verifiedRE.PartitionNumber) -ErrorAction Stop
+                if (-not (Test-RecoveryPartition $verifiedPartition ([string]$disk.PartitionStyle))) {
+                    throw $m.CSExecRecoveryTypeFailed
+                }
+                $verifiedVolume = Get-Volume -Partition $verifiedPartition -ErrorAction Stop
+                if ([int64]$verifiedVolume.SizeRemaining -lt $script:CSFreeReserve) {
+                    throw $m.CSExecRecoveryTooSmall
+                }
                 $script:CSStagingCleanupAllowed = $true
             }
             $script:CSRunHandled = $true
@@ -958,14 +1105,8 @@ try {
         $projectedParts = @(New-ProjectedLayout $parts $c $activeRecovery $plannedCSize $rebuildGeometry $excluded)
         if ($optimiseC -and $null -eq $activeRecovery -and $null -ne $rebuildGeometry) {
             # Synthetic partition for display ONLY. Number 0 signifies new.
-            $newRecovery = [pscustomobject]@{
-                PartitionNumber = 0; Offset = [int64]$rebuildGeometry.NewStart
-                Size = [int64]$rebuildGeometry.NewSize; DriveLetter = $null
-                Type = 'Recovery'
-                GptType = if ([string]$disk.PartitionStyle -eq 'GPT') { '{' + $script:RecoveryGuid + '}' } else { '' }
-                MbrType = if ([string]$disk.PartitionStyle -eq 'MBR') { [uint16]0x27 } else { $null }
-                IsBoot = $false; IsSystem = $false; IsActive = $false
-            }
+            $newRecovery = New-CSProjectedRecovery $disk `
+                ([int64]$rebuildGeometry.NewStart) ([int64]$rebuildGeometry.NewSize)
             $projectedParts = @($projectedParts + @($newRecovery) | Sort-Object Offset)
         }
         $projectedC = @($projectedParts | Where-Object { [int]$_.PartitionNumber -eq [int]$c.PartitionNumber } | Select-Object -First 1)
