@@ -35,12 +35,23 @@ No required parameters. The interactive workflow is: diagnose and show the curre
 | `Check-SystemPartitions.ps1` | Entry point, disk diagnostics, physical partition table, workflow selection, confirmations, and final results. |
 | `Planning.ps1` | **Read-only** Recovery/image assessment and GPT/MBR geometry calculations, including choosing right-side expansion, rebuild after C:, or new Recovery before D:. |
 | `Execution.ps1` | Safety preflight, SHA-256 checked backups, C:/Recovery changes, REAgentC registration and final verification; supports disabled WinRE both in-place and with insufficient Recovery space. |
-| `IsoWinRE.ps1` | Detects installation media, selects image indexes, extracts `Winre.wim` with 7-Zip or DISM. |
+| `IsoWinRE.ps1` | Finds known or mounted Windows ISO sources, attaches ISO files, selects an image index and extracts `Winre.wim` with 7-Zip/DISM. |
+| `../Common/ImageCatalog.ps1` | Shared `Data/images.json` catalog: read, GUID-fragment publication, Windows/SMB locks, atomic merging and `.tmp` cleanup; reusable by `Check-Windows` later. |
 | `Cleanup.ps1` | Audits obsolete partition candidates, boot dependencies, content safety, and individual deletion confirmations. |
 | `../Common/Common.ps1` | Shared launch, elevation, localization, and exit/duration handling. |
 | `../Common/Languages/en.psd1`, `ru.psd1` | English and Russian localized messages. |
 
 The entry script dot-sources the other modules. `RecoveryRepair.ps1` is no longer required: its planning and execution functions have been moved into the corresponding existing modules.
+
+## Shared Windows ISO catalog
+
+The index resides **only in `Data` at the PSWinKit root** (`Data/images.json`, `Data/images_<GUID>.json`, `Data/images.lock`), including when PSWinKit runs from a network drive. The directory is created as needed; there is no separate local index. ISO files themselves are **not copied or downloaded**. Preserve `Data` across PSWinKit updates.
+
+When an installation image is needed, the utility checks saved compatible ISO paths first, then mounted setup media, then accepts a **drive letter** (`F` or `F:`), an **ISO filename** or a **directory path**. Explicit folders and drive roots are searched recursively, without following directory reparse points and with an enumeration limit. Absolute, relative and UNC paths are accepted. ISO files are mounted via built-in Windows tools, using the actual mounted drive letter, and are not automatically dismounted after use.
+
+The stored catalog is only a hint: `install.wim`, `install.esd` or `install.swm` metadata is rechecked before use for the required edition, architecture, installation type and build. Only the defined client Windows 11 shared-core exception applies. A verified ISO is saved immediately **before** WinRE extraction, regardless of any later partition operation result. A physical DVD drive letter alone is not persisted. Local file paths are tagged with the originating computer name; mapped network paths are converted to UNC where possible.
+
+New records are published as `images_<GUID>.json` under a shared `images.lock` handle. At exit, an exclusive handle protects merging into `images.json`, duplicate elimination and cleanup of abandoned GUID `.tmp` files. Normal reads require no lock. Catalog failures do not block the primary WinRE task; damaged fragments are retained for investigation.
 
 ## Scope and safety
 

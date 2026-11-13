@@ -40,6 +40,7 @@ function Select-CSISOImageIndex([string]$path) {
     if ($catalog.Count -eq 0) { throw $m.CSIsoEmptyCatalog }
     $rows = @()
     $matches = @()
+    $script:CSISOSelectedCatalogMetadata = @()
     foreach ($item in $catalog) {
         $d = Get-WindowsImage -ImagePath $path -Index ([int]$item.ImageIndex) -ErrorAction Stop
         $ed = [string]$d.EditionId
@@ -50,6 +51,8 @@ function Select-CSISOImageIndex([string]$path) {
         $rows += [pscustomobject]@{
             Index = [int]$d.ImageIndex; Edition = $ed; Build = $ib
             Architecture = $ar; Name = [string]$d.ImageName
+            InstallationType = [string]$d.InstallationType
+            Language = [string](@($d.Languages) | Select-Object -First 1)
         }
         if ($ed -ieq $edition -and $ar -ieq $architecture -and ($exact -or $shared)) {
             $matches += [pscustomobject]@{
@@ -58,6 +61,15 @@ function Select-CSISOImageIndex([string]$path) {
             }
         }
     }
+    $script:CSISOSelectedCatalogMetadata = @($rows | ForEach-Object {
+        [pscustomobject]@{
+            index = [int]$_.Index; name = [string]$_.Name
+            editionId = [string]$_.Edition; build = [int]$_.Build
+            architecture = [string]$_.Architecture
+            installationType = [string]$_.InstallationType
+            language = [string]$_.Language
+        }
+    })
     Write-Host ''
     Write-Host $m.CSIsoCatalogTitle -ForegroundColor Gray
     $rows | Sort-Object Index | Format-Table `
@@ -115,17 +127,23 @@ function Get-CSSevenZipPath {
     return $null
 }
 
-function Get-CSInstallationSource([string]$letter) {
-    # The first SWM part has no numeric suffix; later parts are install2.swm, etc.
+# Common catalog is shared by Check-SystemPartitions and future Check-Windows.
+# No local machine-specific cache is created.
+. (Join-Path $PSScriptRoot '..\Common\ImageCatalog.ps1')
+
+function Get-CSInstallationSourceAtRoot([string]$root) {
     foreach ($name in @('sources\install.wim', 'sources\install.esd', 'sources\install.swm')) {
-        $candidate = "$letter`:\$name"
+        $candidate = Join-Path $root $name
         if ([IO.File]::Exists($candidate)) { return $candidate }
     }
     return $null
 }
 
+function Get-CSInstallationSource([string]$letter) {
+    return (Get-CSInstallationSourceAtRoot ($letter.ToUpperInvariant() + ':\'))
+}
+
 function Get-CSSplitWimPattern([string]$source) {
-    # DISM requires all split parts in the same directory.
     $folder = Split-Path -Path $source -Parent
     $parts = @(Get-ChildItem -LiteralPath $folder -Filter 'install*.swm' -File -ErrorAction Stop |
         Where-Object { $_.Name -match '(?i)^install(?:[2-9]|[1-9][0-9]+)?\.swm$' })
@@ -138,51 +156,224 @@ function Get-CSSplitWimPattern([string]$source) {
     })
     $max = [int](($numbers | Measure-Object -Maximum).Maximum)
     for ($n = 2; $n -le $max; $n++) {
-        if ($numbers -notcontains $n) {
-            throw ($m.CSIsoSplitMissingPart -f $n)
-        }
+        if ($numbers -notcontains $n) { throw ($m.CSIsoSplitMissingPart -f $n) }
     }
     return (Join-Path $folder 'install*.swm')
 }
 
-function Get-CSMountedInstallationImages {
-    # Win32_CDROMDrive also sees installation ISOs attached by the hypervisor.
-    # Get-DiskImage alone does NOT identify a host-mounted virtual DVD in a guest.
-    $images = New-Object 'System.Collections.Generic.List[object]'
+function Get-CSMountedISOOrigin([string]$letter) {
     try {
-        $drives = @(Get-CimInstance -ClassName Win32_CDROMDrive -ErrorAction Stop)
-    } catch {
-        # Discovery is optional: retain the manual drive-letter fallback.
-        return @()
+        $cd = @(Get-CimInstance Win32_CDROMDrive -ErrorAction Stop |
+            Where-Object { ([string]$_.Drive).TrimEnd(':') -ieq $letter } |
+            Select-Object -First 1)
+        if ($cd.Count -ne 1) { return $null }
+        $image = Get-DiskImage -DevicePath ([string]$cd[0].DeviceID) -ErrorAction Stop
+        if ($image.Attached -and [string]$image.ImagePath -match '(?i)\.iso$' -and
+            [IO.File]::Exists([string]$image.ImagePath)) {
+            return [string]$image.ImagePath
+        }
+    } catch { }
+    return $null
+}
+
+function Mount-CSInstallationISO([string]$path) {
+    $full = (Resolve-Path -LiteralPath $path -ErrorAction Stop).ProviderPath
+    if ([IO.Path]::GetExtension($full) -ine '.iso' -or -not [IO.File]::Exists($full)) {
+        throw ($m.CSIsoInvalidPath -f $path)
     }
+    $image = Get-DiskImage -ImagePath $full -ErrorAction Stop
+    if (-not $image.Attached) {
+        Write-Host ($m.CSIsoMountingFile -f $full) -ForegroundColor Gray
+        $image = Mount-DiskImage -ImagePath $full -PassThru -ErrorAction Stop
+    }
+    $volumes = @($image | Get-Volume -ErrorAction Stop |
+        Where-Object { $_.DriveLetter })
+    $sources = @()
+    foreach ($volume in $volumes) {
+        $source = Get-CSInstallationSource ([string]$volume.DriveLetter)
+        if ($source) { $sources += $source }
+    }
+    if ($sources.Count -ne 1) { throw ($m.CSIsoMountedInvalid -f $full) }
+    return [pscustomobject]@{ Source = $sources[0]; ISOPath = $full }
+}
+
+function Get-CSCatalogMatchingISOs {
+    $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+    $edition = [string]$cv.EditionID
+    $build = [int]$cv.CurrentBuildNumber
+    $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
+    $arch = Get-CSNormalizedArchitecture ([string]$cpu.Architecture)
+    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $isClient = ([int]$osInfo.ProductType -eq 1)
+    $candidates = @()
+    $catalog = @(Get-PSWinKitImageCatalogEntries)
+    foreach ($invalidFile in @($script:PSWinKitImageCatalogReadErrors)) {
+        Write-Warning ($m.CSIsoCatalogCorrupt -f $invalidFile)
+    }
+    foreach ($item in $catalog) {
+        if ($item.host -and [string]$item.host -ine $env:COMPUTERNAME) { continue }
+        if (-not [IO.File]::Exists([string]$item.path)) { continue }
+        $fileInfo = [IO.FileInfo]::new([string]$item.path)
+        if ([int64]$fileInfo.Length -ne [int64]$item.fileSize -or
+            $fileInfo.LastWriteTimeUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture) -ne
+                [string]$item.lastWriteUtc) { continue }
+        $score = -1
+        foreach ($index in @($item.indexes)) {
+            if ($index.editionId -ine $edition -or
+                (Get-CSNormalizedArchitecture ([string]$index.architecture)) -ine $arch) { continue }
+            if ($isClient -and [string]$index.installationType -match '(?i)^Server') { continue }
+            if (-not $isClient -and [string]$index.installationType -eq 'Client') { continue }
+            if ([int]$index.build -eq $build) { $score = 2; break }
+            if ($isClient -and (Test-CSSharedWindows11Core $build ([int]$index.build))) {
+                $score = [math]::Max($score, 1)
+            }
+        }
+        if ($score -ge 0) {
+            $candidates += [pscustomobject]@{
+                Path = [string]$item.path; Score = $score
+                CheckedUtc = [string]$item.checkedUtc
+            }
+        }
+    }
+    return @($candidates | Sort-Object @{Expression='Score';Descending=$true},
+        @{Expression='CheckedUtc';Descending=$true}, Path)
+}
+
+function Select-CSCatalogOrFoundSource([object[]]$candidates, [string]$heading) {
+    if ($candidates.Count -eq 0) { return $null }
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+    Write-Host ''
+    Write-Host $heading -ForegroundColor Cyan
+    for ($i = 0; $i -lt $candidates.Count; $i++) {
+        $display = if ($candidates[$i].PSObject.Properties['Path']) {
+            [string]$candidates[$i].Path
+        } else { [string]$candidates[$i].Source }
+        Write-Host ('  [{0}] {1}' -f ($i + 1), $display)
+    }
+    do {
+        $answer = (Read-Host ($m.CSIsoChooseOption -f $candidates.Count)).Trim()
+        if (-not $answer) { return $null }
+        $number = [int]0
+        $valid = [int]::TryParse($answer, [ref]$number) -and
+            $number -ge 1 -and $number -le $candidates.Count
+    } while (-not $valid)
+    return $candidates[$number - 1]
+}
+
+function Find-CSInstallationSourcesInFolder([string]$folder) {
+    # Explicit user request only. Avoid reparse points and infinite directory loops.
+    $found = New-Object 'System.Collections.Generic.List[object]'
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push([IO.Path]::GetFullPath($folder))
+    $scanned = 0
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        $scanned++
+        if ($scanned -gt 20000) { throw $m.CSIsoSearchLimit }
+        try {
+            $di = [IO.DirectoryInfo]::new($directory)
+            if (($di.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+            $source = Get-CSInstallationSourceAtRoot $directory
+            if ($source) {
+                $found.Add([pscustomobject]@{ Source=$source; ISOPath='' })
+            }
+            foreach ($file in $di.EnumerateFiles('*.iso', [IO.SearchOption]::TopDirectoryOnly)) {
+                $found.Add([pscustomobject]@{ Source=''; ISOPath=$file.FullName })
+                if ($found.Count -gt 250) { throw $m.CSIsoSearchLimit }
+            }
+            foreach ($child in $di.EnumerateDirectories()) {
+                if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+                    $pending.Push($child.FullName)
+                }
+            }
+        } catch [System.UnauthorizedAccessException] { continue }
+    }
+    return @($found.ToArray())
+}
+
+function Resolve-CSUserInstallationSource([string]$inputText) {
+    $entry = $inputText.Trim().Trim('"')
+    if ($entry -match '^[A-Za-z]:?$') { $entry = $entry[0] + ':\' }
+    try {
+        $resolved = (Resolve-Path -LiteralPath $entry -ErrorAction Stop).ProviderPath
+    } catch { throw ($m.CSIsoInvalidPath -f $inputText) }
+    if ([IO.File]::Exists($resolved)) {
+        if ([IO.Path]::GetExtension($resolved) -ine '.iso') {
+            throw ($m.CSIsoInvalidPath -f $inputText)
+        }
+        return (Mount-CSInstallationISO $resolved)
+    }
+    if (-not [IO.Directory]::Exists($resolved)) { throw ($m.CSIsoInvalidPath -f $inputText) }
+    $sources = @(Find-CSInstallationSourcesInFolder $resolved)
+    if ($sources.Count -eq 0) { throw ($m.CSIsoNoFilesInFolder -f $resolved) }
+    $picked = Select-CSCatalogOrFoundSource $sources $m.CSIsoFoundSources
+    if ($null -eq $picked) { return $null }
+    if ($picked.ISOPath) { return (Mount-CSInstallationISO $picked.ISOPath) }
+    # If a user entered F / F: for a mounted ISO, remember the original ISO
+    # path rather than the temporary drive letter. Physical DVDs stay transient.
+    if ([string]$picked.Source -match '^([A-Za-z]):\') {
+        $picked.ISOPath = Get-CSMountedISOOrigin $matches[1]
+    }
+    return $picked
+}
+
+function Get-CSSelectedInstallationSource {
+    # 1. Saved ISO files from the shared Data catalog.
+    $known = @()
+    try { $known = @(Get-CSCatalogMatchingISOs) }
+    catch { Write-Warning ($m.CSIsoCatalogReadFailed -f $_.Exception.Message) }
+    if ($known.Count -gt 0) {
+        $chosen = Select-CSCatalogOrFoundSource $known $m.CSIsoKnownSources
+        if ($null -eq $chosen) { return $null }
+        try {
+            $mountedSource = Mount-CSInstallationISO $chosen.Path
+            # Cache data is only a hint; validate the actual installation media.
+            $mountedIndex = Select-CSISOImageIndex $mountedSource.Source
+            $mountedSource | Add-Member -NotePropertyName VerifiedIndex -NotePropertyValue $mountedIndex
+            return $mountedSource
+        } catch { Write-Warning ($m.CSIsoKnownInvalid -f $_.Exception.Message) }
+    }
+
+    # 2. Already mounted installation media (including hypervisor virtual DVDs).
+    $mounted = @(Get-CSMountedInstallationImages)
+    if ($mounted.Count -gt 0) {
+        $selected = Select-CSCatalogOrFoundSource $mounted $m.CSIsoMountedSources
+        if ($null -eq $selected) { return $null }
+        try {
+            $mountedIndex = Select-CSISOImageIndex ([string]$selected.Source)
+            return [pscustomobject]@{
+                Source = [string]$selected.Source
+                ISOPath = (Get-CSMountedISOOrigin ([string]$selected.Letter))
+                VerifiedIndex = [int]$mountedIndex
+            }
+        } catch { Write-Warning ($m.CSIsoMountedMismatch -f $_.Exception.Message) }
+    }
+
+    # 3. User-provided drive, folder, ISO, UNC or relative path.
+    Write-Host $m.CSIsoNeeded -ForegroundColor Yellow
+    $answer = (Read-Host $m.CSIsoSourcePrompt).Trim()
+    if (-not $answer) { return $null }
+    return (Resolve-CSUserInstallationSource $answer)
+}
+
+function Get-CSMountedInstallationImages {
+    $images = New-Object 'System.Collections.Generic.List[object]'
+    try { $drives = @(Get-CimInstance Win32_CDROMDrive -ErrorAction Stop) }
+    catch { return @() }
     foreach ($drive in $drives) {
         $letter = ([string]$drive.Drive).Trim().TrimEnd(':').ToUpperInvariant()
         if ($letter -notmatch '^[A-Z]$') { continue }
-
-        # A CD/DVD device is not sufficient: it must contain Windows setup media.
         $source = Get-CSInstallationSource $letter
         if (-not $source) { continue }
-
-        # Native mounted ISO: prefer its filename. Hyper-V guest virtual DVDs
-        # may expose only a volume label, so use that if Get-DiskImage fails.
         $label = ''
-        try {
-            $diskImage = Get-DiskImage -DevicePath ([string]$drive.DeviceID) -ErrorAction Stop
-            if ($diskImage.Attached -and ([string]$diskImage.ImagePath) -match '(?i)\.iso$') {
-                $label = [IO.Path]::GetFileName([string]$diskImage.ImagePath)
-            }
-        } catch { }
+        $origin = Get-CSMountedISOOrigin $letter
+        if ($origin) { $label = [IO.Path]::GetFileName($origin) }
         if (-not $label) {
-            try {
-                $volume = Get-Volume -DriveLetter ([char]$letter) -ErrorAction Stop
-                $label = [string]$volume.FileSystemLabel
-            } catch { }
+            try { $label = [string](Get-Volume -DriveLetter ([char]$letter) -ErrorAction Stop).FileSystemLabel }
+            catch { }
         }
         if (-not $label) { $label = [string]$drive.Name }
-
-        $images.Add([pscustomobject]@{
-            Letter = $letter; Name = $label; Source = $source
-        })
+        $images.Add([pscustomobject]@{ Letter=$letter; Name=$label; Source=$source })
     }
     return @($images.ToArray() | Sort-Object Letter)
 }
@@ -192,42 +383,22 @@ function Get-CSISOImage {
         return $script:CSISOImagePath
     }
 
-    $mounted = @(Get-CSMountedInstallationImages)
-    $source = $null
-    if ($mounted.Count -eq 1) {
-        # One installation ISO/DVD: no drive selection is needed.
-        $source = $mounted[0].Source
-    } elseif ($mounted.Count -gt 1) {
-        # Choose the installation medium first; only then inspect its indexes.
-        Write-Host ''
-        Write-Host ($m.CSIsoInstallFile -f '') -ForegroundColor Gray
-        for ($i = 0; $i -lt $mounted.Count; $i++) {
-            Write-Host ('  [{0}] {1}:  {2}' -f ($i + 1), $mounted[$i].Letter, $mounted[$i].Name)
-        }
-        do {
-            $selection = (Read-Host ('{0} (1-{1})' -f $m.CSIsoColumnIndex, $mounted.Count)).Trim()
-            if (-not $selection) { return $null }
-            $number = 0
-            $valid = [int]::TryParse($selection, [ref]$number) -and
-                $number -ge 1 -and $number -le $mounted.Count
-        } while (-not $valid)
-        $source = $mounted[$number - 1].Source
-    } else {
-        # No mounted Windows installation media: keep manual input available.
-        Write-Host $m.CSIsoNeeded -ForegroundColor Yellow
-        $letter = (Read-Host $m.CSIsoLetterPrompt).Trim().TrimEnd(':').ToUpperInvariant()
-        if (-not $letter) { return $null }
-        if ($letter -notmatch '^[A-Z]$') { throw $m.CSIsoInvalidLetter }
-        $source = Get-CSInstallationSource $letter
-        if (-not $source) { throw ($m.CSIsoInstallMissing -f $letter) }
-    }
+    $selected = Get-CSSelectedInstallationSource
+    if ($null -eq $selected) { return $null }
+    $source = [string]$selected.Source
+    $isoPath = [string]$selected.ISOPath
     Write-Host ($m.CSIsoInstallFile -f $source)
-    $extension = [IO.Path]::GetExtension($source).ToLowerInvariant()
-    $swmPattern = $null
-    if ($extension -eq '.swm') {
-        $swmPattern = Get-CSSplitWimPattern $source
+    # This performs the authoritative compatibility check, independent of the cache.
+    $index = if ($selected.PSObject.Properties['VerifiedIndex']) {
+        [int]$selected.VerifiedIndex
+    } else { Select-CSISOImageIndex $source }
+    # Save as soon as the source is validated, BEFORE extraction and disk changes.
+    if ($isoPath -and [IO.File]::Exists($isoPath)) {
+        try {
+            Add-PSWinKitImageCatalogISO $isoPath @($script:CSISOSelectedCatalogMetadata)
+            Write-Host $m.CSIsoCatalogSaved -ForegroundColor DarkGray
+        } catch { Write-Warning ($m.CSIsoCatalogSaveFailed -f $_.Exception.Message) }
     }
-    $index = Select-CSISOImageIndex $source
 
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
     [void](New-Item -Path $base -ItemType Directory -Force -ErrorAction Stop)
@@ -238,27 +409,24 @@ function Get-CSISOImage {
     [void](New-Item -Path $wimDirectory -ItemType Directory -ErrorAction Stop)
     $destination = Join-Path $wimDirectory 'Winre.wim'
 
+    $extension = [IO.Path]::GetExtension($source).ToLowerInvariant()
+    $swmPattern = $null
+    if ($extension -eq '.swm') { $swmPattern = Get-CSSplitWimPattern $source }
     $zip = Get-CSSevenZipPath
-    if ($zip) {
+    if ($zip -and $extension -ne '.swm') {
         $entry = ('{0}\Windows\System32\Recovery\Winre.wim' -f $index)
         Write-Host $m.CSIsoTrying7Zip -ForegroundColor DarkGray
         try {
-            # Native stdout is NOT part of the function result.
-            # Only the final verified Winre.wim path may enter the pipeline.
             & $zip 'e' $source $entry ("-o$wimDirectory") '-y' | Out-Null
             if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', $LASTEXITCODE) }
             Assert-CSWim $destination
         } catch {
             Write-Host ($m.CSIso7ZipFallback -f $_.Exception.Message) -ForegroundColor Yellow
-            if ([IO.File]::Exists($destination)) {
-                Remove-Item -LiteralPath $destination -Force -ErrorAction Stop
-            }
+            if ([IO.File]::Exists($destination)) { Remove-Item -LiteralPath $destination -Force -ErrorAction Stop }
         }
     }
     if (-not [IO.File]::Exists($destination)) {
         $free = [int64](Get-Volume -DriveLetter C -ErrorAction Stop).SizeRemaining
-        # Exporting ESD or split SWM to a temporary single-index WIM may need
-        # several GiB; ordinary WIM can be mounted in place instead.
         $need = if ($extension -in @('.esd', '.swm')) { [int64](9GB) } else { [int64](2GB) }
         if ($free -lt $need) { throw ($m.CSIsoSpaceRequired -f (Format-PartitionSize $need)) }
         $image = $source
@@ -268,8 +436,6 @@ function Get-CSISOImage {
                 "/SourceIndex:$index", "/DestinationImageFile:$image", '/CheckIntegrity')
             if ($extension -eq '.swm') {
                 Write-Host $m.CSIsoExportingSWM -ForegroundColor DarkGray
-                # A split WIM cannot be mounted as-is; DISM can export the
-                # selected index when supplied with all the SWM parts.
                 $exportArgs += "/SWMFile:$swmPattern"
             } else {
                 Write-Host $m.CSIsoExportingESD -ForegroundColor DarkGray
@@ -281,7 +447,7 @@ function Get-CSISOImage {
         $mount = Join-Path $script:CSISOStageDir 'Mount'
         [void](New-Item -Path $mount -ItemType Directory -ErrorAction Stop)
         Write-Host $m.CSIsoMounting -ForegroundColor DarkGray
-        $script:CSISOMounted = $true  # conservative until a successful unmount
+        $script:CSISOMounted = $true
         try {
             Invoke-CSExternal 'dism.exe' @('/English','/Mount-Image',
                 "/ImageFile:$image", "/Index:$index", "/MountDir:$mount", '/ReadOnly') | Out-Null
@@ -305,6 +471,9 @@ function Get-CSISOImage {
 }
 
 function Clear-CSISOStage {
+    # Publication is already complete; merge fragments before staging cleanup.
+    try { Merge-PSWinKitImageCatalog }
+    catch { Write-Warning ($m.CSIsoCatalogMergeFailed -f $_.Exception.Message) }
     if (-not $script:CSISOStageDir) { return }
     if ($script:CSISOMounted -or ($script:CSExecMutated -and -not $script:CSExecLastSucceeded)) {
         Write-Warning ($m.CSIsoStageRetained -f $script:CSISOStageDir)
