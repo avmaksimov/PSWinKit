@@ -914,16 +914,16 @@ try {
 
     $selected = New-Object 'System.Collections.Generic.List[int]'
     $optimiseC = $false
-    $candidates = if ($null -ne $inactiveRecovery) {
-        # Do not offer ANY partition deletion while inactive WinRE has an
-        # unresolved source, insufficient capacity, or a pending repair.
-        @()
-    } else {
-        @($rows | Where-Object {
+    # Initialize a real array: an empty @() emitted from an if-expression
+    # becomes $null in PowerShell 5.1, and $null.Count fails under StrictMode.
+    $candidates = @()
+    if ($null -eq $inactiveRecovery) {
+        $candidates = @($rows | Where-Object {
             (Test-DeletionCandidate $_) -and
             -not (-not $reInfo.Enabled -and $_.Kind -eq 'RecoveryOther')
         })
     }
+    # When inactive WinRE remains unresolved, no partition deletion is offered.
     # Inspect every suspicious partition BEFORE it can be selected.
     # The audit is read-only. A partition with unknown/OEM contents is blocked
     # from optional deletion, even when the user selects it for simulation.
