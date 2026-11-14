@@ -41,6 +41,9 @@ $script:MsrGuid = 'E3C9E316-0B5C-4DB8-817D-F92DF00215AE'
 function Format-PartitionSize([int64]$bytes) {
     if ($bytes -ge $script:GiB) { return ($m.CSSizeGiB -f ([math]::Round($bytes / $script:GiB, 2))) }
     if ($bytes -ge $script:MiB) { return ($m.CSSizeMiB -f ([math]::Round($bytes / $script:MiB, 0))) }
+    if ($bytes -ge ([int64]1000 * $script:KiB)) {
+        return ($m.CSSizeMiBFractional -f ([math]::Round($bytes / [double]$script:MiB, 2)))
+    }
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
@@ -83,6 +86,9 @@ function Format-FreeSpaceSize([int64]$bytes) {
     # Do not round a positive free gap down to zero or hide sub-MiB gaps.
     if ($bytes -ge $script:GiB) { return ($m.CSSizeGiB -f ([math]::Round($bytes / $script:GiB, 2))) }
     if ($bytes -ge $script:MiB) { return ($m.CSSizeMiB -f ([math]::Round($bytes / $script:MiB, 2))) }
+    if ($bytes -ge ([int64]1000 * $script:KiB)) {
+        return ($m.CSSizeMiBFractional -f ([math]::Round($bytes / [double]$script:MiB, 2)))
+    }
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
@@ -1142,9 +1148,12 @@ try {
         Write-Host $m.CSPlanCUnavailable -ForegroundColor Yellow
     }
 
-    Write-Host ''
-    $planTitle = $m.CSProposedPlanTitle
-    Write-Host ('=== ' + $planTitle + ' ===') -ForegroundColor Cyan
+    # Do not print an empty execution plan. The prior diagnostics already
+    # describe why no partition changes are recommended or selected.
+    if ($optimiseC -or $selected.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSProposedPlanTitle + ' ===') -ForegroundColor Cyan
+    }
     $anyAction = $false
     $plannedCSize = [int64]$c.Size
     $rebuildGeometry = $null
@@ -1275,8 +1284,6 @@ try {
             $assessment.Verified -and $null -ne $assessment.FreeBytes -and
             [int64]$assessment.FreeBytes -ge $script:CSFreeReserve) {
             Write-Host $m.CSPlanAlreadyHealthy -ForegroundColor Green
-        } else {
-            Write-Host $m.CSPlanNoActions
         }
     }
     if (@($rows | Where-Object { $_.Kind -eq 'EFI' -and $_.Recommendation -eq $m.CSRecommendEFIAfterC }).Count -gt 0) {

@@ -72,7 +72,7 @@ function Invoke-CSCleanupStaging {
 function Show-CSExistingStages {
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
     if (-not [IO.Directory]::Exists($base)) {
-        Write-Host $m.CSStageNone -ForegroundColor DarkGray
+        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray
         return
     }
     $root = Get-Item -LiteralPath $base -Force -ErrorAction Stop
@@ -84,7 +84,7 @@ function Show-CSExistingStages {
         Where-Object { $_.Name -match '^Stage-[a-fA-F0-9]{32}$' } |
         Sort-Object CreationTime)
     if ($dirs.Count -eq 0) {
-        Write-Host $m.CSStageNone -ForegroundColor DarkGray
+        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray
         return
     }
     Write-Host ''

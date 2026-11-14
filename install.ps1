@@ -177,7 +177,6 @@ try {
     Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
     Write-Host ''
     Write-Host $m.ComparingFiles
-    Write-Host ''
 
     $entries = @()
     $changes = @()
