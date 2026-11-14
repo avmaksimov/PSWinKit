@@ -988,7 +988,7 @@
         CSStageUnsafe = 'Unsafe staging folder detected (possible junction or link); nothing will be deleted: {0}'
         CSStageDeleted = 'Deleted previous staging folders: {0}.'
         CSStageSizeUnknown = 'Unknown'
-        CSStageNone = 'No Stage-* folders from previous runs found: {0}'
+        CSStageNone = 'No Stage-* folders from previous runs found in {0}'
         CSStagePreserved = 'Previous staging folders not deleted: {0}. Rescue files were retained because successful verification and cleanup could not both be confirmed.'
         CSStageUnsafeRoot = 'Staging location is not a normal directory; cleanup was stopped.'
         CS27ExecuteExperimental = 'EXPERIMENTAL DISK EXECUTION: selected changes to C: and the Recovery partition, plus optional deletions, may modify the disk after confirmation.'
