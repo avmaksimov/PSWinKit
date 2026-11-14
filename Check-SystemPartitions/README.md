@@ -6,7 +6,9 @@
 
 ## Features
 
-- Lists partitions in physical order, including unallocated gaps.
+- Lists partitions in physical order, including unallocated gaps, and identifies common virtualization platforms via `Win32_ComputerSystem` (manufacturer/model, not `HypervisorPresent`).
+- When Windows RE is disabled, **first offers `reagentc /enable`** after the read-only boot checks and explicit `Y/N` consent, before ISO selection or disk changes. The command can change REAgentC/boot configuration but does not repartition the disk. State and registered location are checked again; a successful enable ends the run. When the registered partition can be identified, its WIM and free space are assessed. A failed attempt does not stop ordinary physical-machine planning.
+- On a recognized **virtual machine**, **do not offer creating or rebuilding Recovery after C:**; allow enabling a suitable existing Recovery in place. ISO discovery for a missing Recovery is skipped on VMs. This preserves straightforward extension of C: after the virtual disk grows. VM detection may be inconclusive; unknown hardware follows the normal workflow and is labeled as unknown.
 - Locates and validates `Winre.wim`, measures used and available Recovery space, and can propose enlarging and rebuilding Recovery by adjusting C: while preserving the WinRE image and configuration.
 - When WinRE is disabled, can register a **validated image on an existing Recovery partition** without repartitioning, but only on the **same physical disk as Windows**, with enough partition capacity and free space. These conditions are rechecked before enabling WinRE.
 - Supports creation of a missing Recovery on GPT and constrained MBR scenarios: migrating working WinRE from C: to a new Recovery partition, or creating Recovery for disabled WinRE when the disk layout meets all safety checks.

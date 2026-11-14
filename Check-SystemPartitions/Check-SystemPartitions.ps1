@@ -198,6 +198,39 @@ function Test-RecoveryPartition($part, [string]$style) {
     # Never override a known, non-Recovery MBR ID by a friendly Type label.
     return (([string]$part.Type).Trim() -match '^(?i:Recovery|0x27)$')
 }
+# Prefer hypervisor-specific manufacturer/model evidence. A Hyper-V host may
+# report HypervisorPresent, so that property must not classify a physical host as a VM.
+function Get-CSMachineType {
+    try {
+        $computer = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        $manufacturer = [string]$computer.Manufacturer
+        $model = [string]$computer.Model
+        $description = ($manufacturer + ' ' + $model).Trim()
+        if (-not $description) { throw 'Manufacturer and Model are empty.' }
+        $platform = ''
+        if ($description -match '(?i)VMware') { $platform = 'VMware' }
+        elseif ($description -match '(?i)VirtualBox|innotek') { $platform = 'VirtualBox' }
+        elseif ($description -match '(?i)QEMU|KVM|Proxmox|Standard PC \(Q35|Standard PC \(i440FX') {
+            $platform = 'KVM/QEMU'
+        }
+        elseif ($description -match '(?i)Xen|HVM domU') { $platform = 'Xen' }
+        elseif ($description -match '(?i)Parallels') { $platform = 'Parallels' }
+        elseif ($description -match '(?i)bhyve') { $platform = 'bhyve' }
+        elseif ($description -match '(?i)Nutanix|AHV') { $platform = 'Nutanix AHV' }
+        elseif ($description -match '(?i)Virtual Machine|OpenStack|Google Compute Engine|Amazon EC2') {
+            $platform = if ($manufacturer -match '(?i)Microsoft') { 'Hyper-V' }
+                        else { $description }
+        }
+        return [pscustomobject]@{
+            IsVirtual = (-not [string]::IsNullOrEmpty($platform))
+            IsKnown = $true
+            Platform = $platform
+        }
+    } catch {
+        return [pscustomobject]@{ IsVirtual = $false; IsKnown = $false; Platform = '' }
+    }
+}
+
 function Get-WinReSnapshot {
     # Run REAgentC directly. A UNC working directory is safe here and native
     # stderr never becomes a PowerShell error record when $ErrorActionPreference
@@ -641,6 +674,7 @@ try {
     Assert-CSBasicDisk $disk $parts
     $usableBounds = Get-UsableDiskBounds $disk $parts
     $reInfo = Get-WinReSnapshot
+    $machineType = Get-CSMachineType
     # Defer any interactive cleanup prompts until after the non-interactive
     # early pending-CHKDSK guard, so a reboot notice always takes priority.
     $volumeSizes = Get-VolumeSizeMap $parts
@@ -649,6 +683,12 @@ try {
 
     Write-Host ''
     Write-Host ('=== ' + $m.CSAnalysisTitle + ' ===') -ForegroundColor Cyan
+    $machineLabel = if ($machineType.IsVirtual) {
+        $m.CSMachineVirtual -f $machineType.Platform
+    } elseif ($machineType.IsKnown) { $m.CSMachinePhysical }
+    else { $m.CSMachineUnknown }
+    $machineColor = if ($machineType.IsKnown) { 'Gray' } else { 'Yellow' }
+    Write-Host ($m.CSMachineType -f $machineLabel) -ForegroundColor $machineColor
     Write-Host ($m.CSInfoDisk -f $disk.Number, $disk.PartitionStyle, (Format-PartitionSize ([int64]$disk.Size)))
     $reText = if ($reInfo.Enabled) { $m.CSWinREEnabled } else { $m.CSWinREDisabled }
     $reSuffix = ''
@@ -671,6 +711,74 @@ try {
         $script:CSRunHandled = $true
         return
     }
+    # First give Windows its standard non-repartitioning WinRE recovery path.
+    # reagentc /enable changes recovery configuration, so always ask first.
+    # A successful attempt ends this run: do not combine it with disk changes.
+    if (-not $reInfo.Enabled) {
+        Write-Host ''
+        Write-Host ('=== ' + $m.CSReEnableTitle + ' ===') -ForegroundColor Cyan
+        if (Read-YesNo $m.CSReEnableQuestion) {
+            Write-Host $m.CSReEnableRunning -ForegroundColor Cyan
+            $enableError = ''
+            try {
+                Invoke-CSExternal 'reagentc.exe' @('/enable')
+            } catch {
+                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                $enableError = $_.Exception.Message
+            }
+            # The exit code alone is insufficient: REAgentC may have changed
+            # registration before returning a failure. Always inspect reality.
+            $reInfo = Get-WinReSnapshot
+            $parts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop | Sort-Object Offset)
+            if ($reInfo.Enabled) {
+                Write-Host $m.CSReEnableSucceeded -ForegroundColor Green
+                $liveActive = Get-ActiveRecovery $parts $reInfo `
+                    ([int]$disk.Number) ([string]$disk.PartitionStyle)
+                if ($null -ne $liveActive) {
+                    Write-Host ($m.CSReEnableRegistered -f $disk.Number, $liveActive.PartitionNumber)
+                    try {
+                        $check = Get-CSImageAssessment $disk $c $parts $reInfo $liveActive
+                        if ($check.Verified) {
+                            Write-Host ($m.CSReEnableVerified -f (Format-DetailedSize $check.WIMBytes))
+                            if ($null -eq $check.FreeBytes -or
+                                [int64]$check.FreeBytes -lt $script:CSFreeReserve) {
+                                Write-Host $m.CSReEnableSpaceWarning -ForegroundColor Yellow
+                            }
+                        } else {
+                            Write-Host ($m.CSReEnableVerifyWarning -f $check.Error) -ForegroundColor Yellow
+                        }
+                    } catch {
+                        if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                        Write-Host ($m.CSReEnableVerifyWarning -f $_.Exception.Message) -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host $m.CSReEnableLocationWarning -ForegroundColor Yellow
+                }
+                if ($enableError) { Write-Host ($m.CSReEnableCommandWarning -f $enableError) -ForegroundColor Yellow }
+                Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c -CleanupAudits @()
+                $script:CSRunHandled = $true
+                return
+            }
+            if ($enableError) {
+                Write-Host ($m.CSReEnableFailed -f $enableError) -ForegroundColor Yellow
+            } else {
+                Write-Host $m.CSReEnableStillDisabled -ForegroundColor Yellow
+            }
+            # The attempted registration may have updated REAgentC metadata.
+            # Do not use stale candidate/partition information afterwards.
+            $activeRecovery = Get-ActiveRecovery $parts $reInfo `
+                ([int]$disk.Number) ([string]$disk.PartitionStyle)
+            $inactiveRecovery = Get-CSInactiveRecoveryCandidate $disk $c $parts $reInfo
+            $rows = @(New-PartitionRows $disk $c $parts $reInfo $usableBounds `
+                (Get-VolumeSizeMap $parts))
+        } else {
+            Write-Host $m.CSReEnableSkipped -ForegroundColor DarkGray
+        }
+        if ($machineType.IsVirtual) {
+            Write-Host $m.CSVmPreserveTail -ForegroundColor DarkGray
+        }
+    }
+
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
     Write-Host ''
@@ -679,10 +787,10 @@ try {
     $assessment = if ($null -ne $inactiveRecovery) {
         Get-CSInactiveRecoveryAssessment $disk $c $parts $reInfo $inactiveRecovery
     } else {
-        Get-CSImageAssessment $disk $c $parts $reInfo $activeRecovery
+        Get-CSImageAssessment $disk $c $parts $reInfo $activeRecovery ([bool]$machineType.IsVirtual)
     }
-    if ($null -eq $inactiveRecovery -and -not $assessment.Verified -and
-        [string]$disk.PartitionStyle -eq 'MBR') {
+    if (-not $machineType.IsVirtual -and $null -eq $inactiveRecovery -and
+        -not $assessment.Verified -and [string]$disk.PartitionStyle -eq 'MBR') {
         $assessment = Get-CSMissingMBRImageAssessment $disk $c $parts $reInfo $assessment
     }
     $vol = $null
@@ -696,7 +804,9 @@ try {
         Write-Host ($m.CS26MinimumSize -f (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes)))
         Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
     } else {
-        Write-Host ($m.CS26ImageUnavailable -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
+        $imageMessage = if ($machineType.IsVirtual) { $m.CSVmImageUnavailable }
+                        else { $m.CS26ImageUnavailable }
+        Write-Host ($imageMessage -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
     }
     if ($null -ne $inactiveRecovery) {
         if (-not $assessment.Verified -or $null -eq $assessment.Existing) {
@@ -711,12 +821,14 @@ try {
             Write-Host $m.CSInactiveVolumeUnsafe -ForegroundColor Yellow
         }
     }
-    $proposal = if ($null -ne $inactiveRecovery) { $null } else {
+    # In a VM, keep C: as the last partition when it already is; never offer
+    # new/recreated Recovery after C:, even for cosmetic C: alignment.
+    $proposal = if ($machineType.IsVirtual -or $null -ne $inactiveRecovery) { $null } else {
         Get-CSPlanningDecision $disk $c $parts $reInfo $activeRecovery `
             $assessment $vol $usableBounds
     }
-    if ($null -eq $proposal -and $null -eq $inactiveRecovery -and
-        [string]$disk.PartitionStyle -eq 'MBR') {
+    if (-not $machineType.IsVirtual -and $null -eq $proposal -and
+        $null -eq $inactiveRecovery -and [string]$disk.PartitionStyle -eq 'MBR') {
         $proposal = Get-CSMissingMBRPlan $disk $c $parts $reInfo `
             $assessment $vol $usableBounds
     }
@@ -790,8 +902,8 @@ try {
     # prefer its right-side free space, then a guarded C: shrink. If D: sits
     # between C: and the old Recovery, create a NEW Recovery before D: and
     # retain the old partition for a later, separately audited cleanup.
-    if ($null -ne $inactiveRecovery -and $assessment.Verified -and
-        $null -ne $assessment.Existing -and
+    if (-not $machineType.IsVirtual -and $null -ne $inactiveRecovery -and
+        $assessment.Verified -and $null -ne $assessment.Existing -and
         -not (Test-CSInactiveRecoveryReady $disk $inactiveRecovery $assessment)) {
         $smallPlan = Get-CSInactiveSmallRecoveryPlan $disk $c $parts $reInfo `
             $inactiveRecovery $assessment $usableBounds

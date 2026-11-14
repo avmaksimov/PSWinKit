@@ -11,7 +11,7 @@ $script:CSNewNtfsAllowance = [int64]64MB
 $script:CSCosmeticLimit = [int64]256MB
 $script:CSBeautyStep = [int64](10GB)
 
-function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
+function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery, [bool]$SkipISO = $false) {
     $out = [ordered]@{
         Found = $false; Verified = $false; Source = ''; WIMBytes = [int64]0
         ExtraBytes = [int64]0; Existing = $null; UsedBytes = $null
@@ -119,7 +119,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery) {
                 $out.MinRecoveryBytes = $null
             }
         }
-        if ($null -eq $path -and -not $reInfo.Enabled -and
+        if ($null -eq $path -and -not $SkipISO -and -not $reInfo.Enabled -and
             [string]$disk.PartitionStyle -eq 'GPT' -and
             $null -eq $activeRecovery -and
             @($parts | Where-Object { Test-RecoveryPartition $_ ([string]$disk.PartitionStyle) }).Count -eq 0) {
