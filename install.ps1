@@ -171,6 +171,7 @@ try {
     )
     if ($sourceFiles.Count -eq 0) { throw $m.NoSourceFiles }
 
+    Write-Host ''
     Write-Host $m.SummaryTitle -ForegroundColor Cyan
     Write-Host ($m.Destination -f $target) -ForegroundColor Gray
     Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
