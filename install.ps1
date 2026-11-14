@@ -138,7 +138,7 @@ function Get-TargetFile {
     return $destination
 }
 
-# Print each file result immediately, before checking the next file.
+# Print the complete comparison table after the progress indicator is cleared.
 function Write-InstallFileRow {
     param([string]$State, [string]$Name)
 
@@ -175,38 +175,48 @@ try {
     Write-Host $m.SummaryTitle -ForegroundColor Cyan
     Write-Host ($m.Destination -f $target) -ForegroundColor Gray
     Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
-    Write-Host ('-' * 60) -ForegroundColor DarkGray
+    Write-Host ''
     Write-Host $m.ComparingFiles
-    Write-Host $m.StateLegend -ForegroundColor DarkGray
     Write-Host ''
 
     $entries = @()
     $changes = @()
     $newNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($sourceFile in $sourceFiles) {
-        if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            Assert-PSWinKitSafeFilePathComponent -Path $sourceFile.FullName -ErrorMessage $m.SourceLink
+    # Use Write-Progress only while hashing; never mix progress repainting with
+    # the permanent table. Paths are already sorted in $sourceFiles.
+    $checkedCount = 0
+    try {
+        foreach ($sourceFile in $sourceFiles) {
+            $progressName = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
+            Write-Progress -Id 1 -Activity $m.ComparingFiles -Status $progressName `
+                -PercentComplete ([int][math]::Floor(100.0 * $checkedCount / $sourceFiles.Count))
+            if (($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                Assert-PSWinKitSafeFilePathComponent -Path $sourceFile.FullName -ErrorMessage $m.SourceLink
+            }
+            $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
+            if (-not (Test-RelativeFileName -Name $name)) { throw ($m.InvalidPath -f $name) }
+            if (-not $newNames.Add($name)) { throw ($m.DuplicatePath -f $name) }
+            $from = $sourceFile.FullName
+            $to = Get-TargetFile -Name $name
+            if (Test-Path -LiteralPath $to -PathType Container) {
+                throw ($m.TargetIsDirectory -f $to)
+            }
+            $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
+            $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
+                'INSTALL'
+            } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
+                'REPLACE'
+            } else {
+                'UNCHANGED'
+            }
+            $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
+            $entries += $entry
+            if ($state -ne 'UNCHANGED') { $changes += $entry }
+            $checkedCount++
         }
-        $name = $sourceFile.FullName.Substring($sourceRoot.Length).TrimStart('\')
-        if (-not (Test-RelativeFileName -Name $name)) { throw ($m.InvalidPath -f $name) }
-        if (-not $newNames.Add($name)) { throw ($m.DuplicatePath -f $name) }
-        $from = $sourceFile.FullName
-        $to = Get-TargetFile -Name $name
-        if (Test-Path -LiteralPath $to -PathType Container) {
-            throw ($m.TargetIsDirectory -f $to)
-        }
-        $newHash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
-        $state = if (-not (Test-Path -LiteralPath $to -PathType Leaf)) {
-            'INSTALL'
-        } elseif ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ine $newHash) {
-            'REPLACE'
-        } else {
-            'UNCHANGED'
-        }
-        $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
-        $entries += $entry
-        if ($state -ne 'UNCHANGED') { $changes += $entry }
-        Write-InstallFileRow -State $state -Name $name
+    } finally {
+        # Also clear the progress pane when validation or SHA-256 throws.
+        Write-Progress -Id 1 -Activity $m.ComparingFiles -Completed
     }
 
     # Read the old list only to find obsolete files. Missing, empty, malformed
@@ -267,7 +277,13 @@ try {
         }
     }
 
-    # Show removals only after the full old inventory has passed validation.
+    # With the progress pane gone, render the stable, complete result table.
+    Write-Host ''
+    Write-Host $m.StateLegend -ForegroundColor DarkGray
+    Write-Host ''
+    foreach ($entry in $entries) {
+        Write-InstallFileRow -State $entry.State -Name $entry.Name
+    }
     foreach ($item in $removals) {
         Write-InstallFileRow -State $item.State -Name $item.Name
     }

@@ -689,6 +689,7 @@ try {
     else { $m.CSMachineUnknown }
     $machineColor = if ($machineType.IsKnown) { 'Gray' } else { 'Yellow' }
     Write-Host ($m.CSMachineType -f $machineLabel) -ForegroundColor $machineColor
+    Write-Host $m.CSMachineDetectionNotice -ForegroundColor DarkGray
     Write-Host ($m.CSInfoDisk -f $disk.Number, $disk.PartitionStyle, (Format-PartitionSize ([int64]$disk.Size)))
     $reText = if ($reInfo.Enabled) { $m.CSWinREEnabled } else { $m.CSWinREDisabled }
     $reSuffix = ''
@@ -720,11 +721,17 @@ try {
         if (Read-YesNo $m.CSReEnableQuestion) {
             Write-Host $m.CSReEnableRunning -ForegroundColor Cyan
             $enableError = ''
+            $enableExitCode = $null
             try {
                 Invoke-CSExternal 'reagentc.exe' @('/enable')
             } catch {
                 if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
                 $enableError = $_.Exception.Message
+                # REAgentC prints its own diagnosis. Report only the exit code
+                # rather than repeating the same failure in a second sentence.
+                if ($null -ne $LASTEXITCODE -and [int]$LASTEXITCODE -ne 0) {
+                    $enableExitCode = [int]$LASTEXITCODE
+                }
             }
             # The exit code alone is insufficient: REAgentC may have changed
             # registration before returning a failure. Always inspect reality.
@@ -760,7 +767,11 @@ try {
                 return
             }
             if ($enableError) {
-                Write-Host ($m.CSReEnableFailed -f $enableError) -ForegroundColor Yellow
+                if ($null -ne $enableExitCode) {
+                    Write-Host ($m.CSReEnableExitCode -f $enableExitCode) -ForegroundColor Yellow
+                } else {
+                    Write-Host ($m.CSReEnableFailed -f $enableError) -ForegroundColor Yellow
+                }
             } else {
                 Write-Host $m.CSReEnableStillDisabled -ForegroundColor Yellow
             }
@@ -773,9 +784,6 @@ try {
                 (Get-VolumeSizeMap $parts))
         } else {
             Write-Host $m.CSReEnableSkipped -ForegroundColor DarkGray
-        }
-        if ($machineType.IsVirtual) {
-            Write-Host $m.CSVmPreserveTail -ForegroundColor DarkGray
         }
     }
 
@@ -804,12 +812,21 @@ try {
         Write-Host ($m.CS26MinimumSize -f (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes)))
         Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
     } else {
-        $imageMessage = if ($machineType.IsVirtual) { $m.CSVmImageUnavailable }
-                        else { $m.CS26ImageUnavailable }
-        Write-Host ($imageMessage -f (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
+        if ($machineType.IsVirtual -and $null -ne $inactiveRecovery) {
+            # REAgentC has already reported its failure, if attempted. State
+            # only the image-inspection result for this existing partition.
+            Write-Host ($m.CSVmMissingRecoveryImage -f $inactiveRecovery.PartitionNumber) -ForegroundColor Yellow
+        } elseif ($machineType.IsVirtual) {
+            Write-Host $m.CSVmNoVerifiedImage -ForegroundColor Yellow
+        } else {
+            Write-Host ($m.CS26ImageUnavailable -f
+                (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
+        }
     }
-    if ($null -ne $inactiveRecovery) {
-        if (-not $assessment.Verified -or $null -eq $assessment.Existing) {
+    if ($null -ne $inactiveRecovery -and $assessment.Verified) {
+        if ($null -eq $assessment.Existing) {
+            # Only when a validated image came from another location: this
+            # existing Recovery still cannot be registered automatically.
             Write-Host $m.CSInactiveImageUnavailable -ForegroundColor Yellow
         } elseif ($null -ne $assessment.MinRecoveryBytes -and
             [int64]$inactiveRecovery.Size -lt [int64]$assessment.MinRecoveryBytes) {
@@ -873,8 +890,10 @@ try {
         Write-Host $m.CSGptBoundsUnavailable -ForegroundColor Yellow
     }
 
-    Write-Host ''
-    Write-Host $m.CS27ReadOnlyUntilConfirm -ForegroundColor Yellow
+    if ($machineType.IsVirtual -and -not $reInfo.Enabled) {
+        Write-Host ''
+        Write-Host $m.CSVmPreserveTail -ForegroundColor DarkGray
+    }
     if ($null -eq $vol) { Write-Host $m.CSPlanNoCapacity -ForegroundColor Yellow }
     # WinRE registered on C: is known; it is not a missing/unknown WinRE.
     # The supported MBR migration intentionally has no separate Recovery yet.
