@@ -15,7 +15,9 @@
 
 ## Requirements and use
 
-Windows 10+, Windows Server 2016+, Windows PowerShell 5.1; x86/x64 where supported. Some utilities require administrator privileges. No separate PowerShell 7 installation or third-party module is required for the shared library.
+**Supported operating systems:** Windows 10/11 and **Windows Server 2016 or later** (including Windows Server 2019, 2022 and 2025); Windows PowerShell 5.1; x86/x64 where supported. Some utilities require administrator privileges. The shared library does not require PowerShell 7 or third-party modules.
+
+**Windows Server 2016 is an ongoing compatibility baseline.** Future changes must continue to work with Windows PowerShell 5.1 and supported APIs/cmdlets available on Server 2016. Newer Windows-only capabilities must be checked before use, with safe handling of unsupported operations. WinRE and disk repair operations depend on system tools and partition layout; see each utility's limitations. This is a maintenance requirement, not a claim of successful runtime testing of every operation on every server edition.
 
 From a PowerShell console in the repository root:
 
@@ -59,7 +61,7 @@ From the existing PSWinKit installation directory, run:
 
 `update.ps1` compares the installed SHA with the latest commit on GitHub's `main` branch. If they differ or the installed SHA is unknown, it downloads the source archive and invokes a fresh `install.ps1`. When the GitHub API is available, the archive is pinned to a specific commit and its SHA and date are recorded; if the API is unavailable, it falls back to `main.zip` without verified version metadata. The installer does not require elevation unless the destination directory requires it.
 
-Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. If the GitHub API cannot verify the commit, the fields remain empty; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
+Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `UNCHANGED`, `REMOVE` summary. File results appear in sorted path order **as each SHA-256 check completes**; removal candidates are shown after old-inventory validation. The totals appear after the safety notes, immediately before the final confirmation. The installer preserves unrelated files, skips any path containing a dot-prefixed name (including Git metadata) and does not copy itself. It maintains a locally generated `install.psd1` with an `installed-files` list for removal of obsolete files and a separate `install-info` section containing the verified full commit SHA and UTC commit date. If the GitHub API cannot verify the commit, the fields remain empty; a missing `install-info` is treated as a first installation. If the file or list is missing or invalid, obsolete-file removal is skipped. File contents are compared with SHA-256; all changes including removals require one confirmation. Existing-version backups and automatic rollback are not provided. Do not manually edit `install.psd1`.
 
 ## Project organization
 

@@ -138,13 +138,27 @@ function Get-TargetFile {
     return $destination
 }
 
+# Print each file result immediately, before checking the next file.
+function Write-InstallFileRow {
+    param([string]$State, [string]$Name)
+
+    $stateColor = switch ($State) {
+        'INSTALL'   { 'Green' }
+        'REPLACE'   { 'Yellow' }
+        'REMOVE'    { 'Red' }
+        default     { 'DarkGray' }
+    }
+    Write-Host ("  {0,-11}" -f $State) -ForegroundColor $stateColor -NoNewline
+    $nameColor = if ($State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
+    Write-Host $Name -ForegroundColor $nameColor
+}
+
 try {
     $targetRoot = Get-Item -LiteralPath $target -Force -ErrorAction Stop
     if (($targetRoot.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw ($m.LinkPath -f $target)
     }
     $sourceRoot = $PSScriptRoot.TrimEnd('\')
-    Write-Host $m.ComparingFiles
     # Find all repository files, including nested folders; omit dot-prefixed
     # items, this installer and the locally generated install.psd1.
     $sourceFiles = @(
@@ -156,6 +170,14 @@ try {
             Sort-Object { $_.FullName.Substring($sourceRoot.Length).TrimStart('\') }
     )
     if ($sourceFiles.Count -eq 0) { throw $m.NoSourceFiles }
+
+    Write-Host $m.SummaryTitle -ForegroundColor Cyan
+    Write-Host ($m.Destination -f $target) -ForegroundColor Gray
+    Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
+    Write-Host ('-' * 60) -ForegroundColor DarkGray
+    Write-Host $m.ComparingFiles
+    Write-Host $m.StateLegend -ForegroundColor DarkGray
+    Write-Host ''
 
     $entries = @()
     $changes = @()
@@ -183,6 +205,7 @@ try {
         $entry = [pscustomobject]@{ Name=$name; Source=$from; Target=$to; Hash=$newHash; State=$state }
         $entries += $entry
         if ($state -ne 'UNCHANGED') { $changes += $entry }
+        Write-InstallFileRow -State $state -Name $name
     }
 
     # Read the old list only to find obsolete files. Missing, empty, malformed
@@ -224,7 +247,7 @@ try {
     $removals = @()
     if ($oldValid) {
         try {
-            foreach ($oldName in $oldNames) {
+            foreach ($oldName in ($oldNames | Sort-Object)) {
                 if ($newNames.Contains($oldName)) { continue }
                 $oldPath = Get-TargetFile -Name $oldName
                 if (Test-Path -LiteralPath $oldPath -PathType Container) {
@@ -241,6 +264,11 @@ try {
             $oldValid = $false
             $oldNames = @()
         }
+    }
+
+    # Show removals only after the full old inventory has passed validation.
+    foreach ($item in $removals) {
+        Write-InstallFileRow -State $item.State -Name $item.Name
     }
 
     # The state file is rewritten when missing or when its inventory changed.
@@ -267,28 +295,10 @@ try {
         $installCount = @($changes | Where-Object { $_.State -eq 'INSTALL' }).Count
         $replaceCount = @($changes | Where-Object { $_.State -eq 'REPLACE' }).Count
         $unchangedCount = $entries.Count - $changes.Count
-        Write-Host $m.SummaryTitle -ForegroundColor Cyan
-        Write-Host ($m.Destination -f $target) -ForegroundColor Gray
-        Write-Host ($m.Version -f $versionLabel) -ForegroundColor Gray
-        Write-Host ''
-        Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
-        Write-Host ''
-        Write-Host $m.StateLegend -ForegroundColor DarkGray
-        Write-Host ''
-        foreach ($item in @($entries) + @($removals)) {
-            $stateColor = switch ($item.State) {
-                'INSTALL' { 'Green' }
-                'REPLACE' { 'Yellow' }
-                'REMOVE' { 'Red' }
-                default { 'DarkGray' }
-            }
-            Write-Host ("  {0,-11}" -f $item.State) -ForegroundColor $stateColor -NoNewline
-            $nameColor = if ($item.State -eq 'UNCHANGED') { 'DarkGray' } else { 'White' }
-            Write-Host $item.Name -ForegroundColor $nameColor
-        }
-        Write-Host ''
         Write-Host $m.ChangeNotice -ForegroundColor Gray
         Write-Host $m.NoBackups -ForegroundColor Gray
+        Write-Host ''
+        Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
         Write-Host ''
         $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
         if ($choice -cne 'Y') {
