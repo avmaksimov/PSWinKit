@@ -138,6 +138,40 @@ function Get-TargetFile {
     return $destination
 }
 
+# Remove only empty directories that belonged to files removed from the old
+# install.psd1 inventory. Do not sweep unrelated empty user directories.
+# Never delete the installation root or traverse reparse directories.
+function Remove-PSWinKitEmptyManagedDirectories {
+    param([object[]]$RemovedEntries)
+
+    $root = [IO.Path]::GetFullPath($target).TrimEnd('\')
+    $prefix = $root + '\'
+    $candidates = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $RemovedEntries) {
+        $directory = [IO.Path]::GetDirectoryName([string]$entry.Target)
+        while ($directory -and $directory.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            [void]$candidates.Add($directory)
+            $directory = [IO.Path]::GetDirectoryName($directory)
+        }
+    }
+
+    # Delete child folders first, then their parents if they also become empty.
+    foreach ($directory in @($candidates | Sort-Object { $_.Length } -Descending)) {
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+        $relative = $directory.Substring($prefix.Length)
+        # Recheck every component immediately before deletion.
+        [void](Get-TargetFile -Name (Join-Path $relative '__pswinkit_cleanup_probe__'))
+        $children = @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop | Select-Object -First 1)
+        if ($children.Count -gt 0) { continue }
+        try {
+            [IO.Directory]::Delete($directory, $false)
+            Write-Host ($m.RemovedEmptyDirectory -f $relative) -ForegroundColor DarkGray
+        } catch {
+            Write-Warning ($m.EmptyDirectoryCleanupFailed -f $relative, $_.Exception.Message)
+        }
+    }
+}
+
 # Print the complete comparison table after the progress indicator is cleared.
 function Write-InstallFileRow {
     param([string]$State, [string]$Name)
@@ -360,6 +394,9 @@ try {
             $replacementStarted = $true
             Remove-Item -LiteralPath $item.Target -Force -ErrorAction Stop
             Write-Host ($m.Removed -f $item.Name) -ForegroundColor Green
+        }
+        if ($removals.Count -gt 0) {
+            Remove-PSWinKitEmptyManagedDirectories -RemovedEntries $removals
         }
 
     }

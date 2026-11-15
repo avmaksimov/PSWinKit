@@ -392,12 +392,20 @@ function Get-CSISOImage {
     $index = if ($selected.PSObject.Properties['VerifiedIndex']) {
         [int]$selected.VerifiedIndex
     } else { Select-CSISOImageIndex $source }
-    # Save as soon as the source is validated, BEFORE extraction and disk changes.
+    # Make the original Winre.wim source unambiguous: the extracted WIM is
+    # staged under ProgramData, but comes from this installation image/index.
+    Write-Host ($m.CSIsoWinreSource -f $source, $index) -ForegroundColor Gray
+    $catalogFile = Join-Path (Get-PSWinKitImageCatalogDirectory) 'images.json'
+    # A mounted hypervisor DVD may expose E:\sources\install.swm without
+    # revealing its ISO path on the host. Do not cache a fictional ISO path.
     if ($isoPath -and [IO.File]::Exists($isoPath)) {
+        Write-Host ($m.CSIsoISOOrigin -f $isoPath) -ForegroundColor Gray
         try {
             Add-PSWinKitImageCatalogISO $isoPath @($script:CSISOSelectedCatalogMetadata)
-            Write-Host $m.CSIsoCatalogSaved -ForegroundColor DarkGray
+            Write-Host ($m.CSIsoCatalogSavedPath -f $catalogFile) -ForegroundColor DarkGray
         } catch { Write-Warning ($m.CSIsoCatalogSaveFailed -f $_.Exception.Message) }
+    } else {
+        Write-Host ($m.CSIsoCatalogNotSavedPath -f $catalogFile) -ForegroundColor DarkGray
     }
 
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
