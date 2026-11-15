@@ -324,18 +324,28 @@ try {
 
         # Stage every changed file beside its destination; then replace via move.
         # Nothing is removed before every staged SHA-256 has been verified.
-        foreach ($item in $changes) {
-            $parentDir = Split-Path -Path $item.Target -Parent
-            if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
-                New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+        # Show progress only while staging; leave the replacement log undisturbed.
+        $preparedCount = 0
+        try {
+            foreach ($item in $changes) {
+                Write-Progress -Id 2 -Activity $m.PreparingFiles -Status $item.Name `
+                    -PercentComplete ([int][math]::Floor(100.0 * $preparedCount / $changes.Count))
+                $parentDir = Split-Path -Path $item.Target -Parent
+                if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
+                    New-Item -ItemType Directory -Path $parentDir -Force -ErrorAction Stop | Out-Null
+                }
+                $staged = $item.Target + '.new'
+                if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
+                $stagedFiles.Add($staged)
+                Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
+                if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
+                    throw ($m.HashMismatch -f $staged)
+                }
+                $preparedCount++
             }
-            $staged = $item.Target + '.new'
-            if (Test-Path -LiteralPath $staged) { throw ($m.StageExists -f $staged) }
-            $stagedFiles.Add($staged)
-            Copy-Item -LiteralPath $item.Source -Destination $staged -ErrorAction Stop
-            if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $item.Hash) {
-                throw ($m.HashMismatch -f $staged)
-            }
+        } finally {
+            # Clear the progress pane even if copying or hash verification fails.
+            Write-Progress -Id 2 -Activity $m.PreparingFiles -Completed
         }
         # Replace the updater last; its running code is already loaded in memory.
         foreach ($item in @($changes | Where-Object { $_.Name -ine 'update.ps1' }) +

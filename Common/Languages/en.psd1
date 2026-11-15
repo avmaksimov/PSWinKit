@@ -257,6 +257,7 @@
         UnknownVersion = 'Unknown (GitHub commit not verified)'
         InvalidVersion = 'Invalid commit SHA or commit date.'
         ComparingFiles = 'Checking paths and comparing SHA-256 hashes...'
+        PreparingFiles = 'Preparing and verifying files...'
         StateLegend = 'INSTALL = new; REPLACE = changed; UNCHANGED = identical SHA-256; REMOVE = obsolete.'
         SummaryTitle = '=== INSTALL / UPDATE SUMMARY ==='
         Destination = 'Destination: {0}'

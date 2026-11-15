@@ -257,6 +257,7 @@
         UnknownVersion = 'Неизвестна (коммит GitHub не подтверждён)'
         InvalidVersion = 'Некорректный SHA коммита или дата коммита.'
         ComparingFiles = 'Проверка путей и сравнение контрольных сумм SHA-256...'
+        PreparingFiles = 'Подготовка и проверка файлов...'
         StateLegend = 'INSTALL = новый; REPLACE = изменён; UNCHANGED = SHA-256 совпадает; REMOVE = устаревший.'
         SummaryTitle = '=== УСТАНОВКА / ОБНОВЛЕНИЕ ==='
         Destination = 'Каталог назначения: {0}'
