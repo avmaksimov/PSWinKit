@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-# Internal, read-only ISO source loader for missing Recovery creation.
+# ISO source loader for missing Recovery creation and safe in-place WinRE restoration.
 # Staged Windows images live on C:; none of these functions changes partitions.
 
 $script:CSISOStageDir = $null

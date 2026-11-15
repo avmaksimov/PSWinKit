@@ -643,8 +643,9 @@ function Show-CSFinalSummary {
         Write-Host ($m.CSFinalRE -f $liveActive.PartitionNumber,
             (Format-DetailedSize ([int64]$liveActive.Size)),
             (Format-DetailedSize ([int64]$reVolume.SizeRemaining)))
-        if ([int64]$reVolume.SizeRemaining -lt [int64]250MB) {
-            Write-Host $m.CSFinalFreeWarning -ForegroundColor Yellow
+        $minFree = [int64](Get-CSInPlaceRequiredFree $liveActive)
+        if ([int64]$reVolume.SizeRemaining -lt $minFree) {
+            Write-Host ($m.CSFinalFreeWarning -f (Format-DetailedSize $minFree)) -ForegroundColor Yellow
         }
     } else {
         Write-Host $m.CSFinalREUnknown -ForegroundColor Yellow
@@ -753,9 +754,11 @@ try {
                         $check = Get-CSImageAssessment $disk $c $parts $reInfo $liveActive
                         if ($check.Verified) {
                             Write-Host ($m.CSReEnableVerified -f (Format-DetailedSize $check.WIMBytes))
+                            $minFree = [int64](Get-CSInPlaceRequiredFree $liveActive)
                             if ($null -eq $check.FreeBytes -or
-                                [int64]$check.FreeBytes -lt $script:CSFreeReserve) {
-                                Write-Host $m.CSReEnableSpaceWarning -ForegroundColor Yellow
+                                [int64]$check.FreeBytes -lt $minFree) {
+                                Write-Host ($m.CSReEnableSpaceWarning -f
+                                    (Format-DetailedSize $minFree)) -ForegroundColor Yellow
                             }
                         } else {
                             Write-Host ($m.CSReEnableVerifyWarning -f $check.Error) -ForegroundColor Yellow
@@ -906,6 +909,55 @@ try {
     if ($reInfo.Enabled -and $null -eq $activeRecovery -and
         -not ($null -ne $proposal -and $proposal.MigratingWinREOnC)) {
         Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow
+    }
+
+    # Missing Winre.wim on a UNIQUE inactive Recovery: offer restoration into
+    # that same partition. On a VM this is the only offered recovery repair;
+    # never create a new Recovery after C:.
+    if ($null -ne $inactiveRecovery -and -not $assessment.Verified -and
+        -not $reInfo.Enabled) {
+        Write-Host ''
+        if (Read-YesNo ($m.CSInPlaceFindSource -f $inactiveRecovery.PartitionNumber)) {
+            $restoreImage = $null
+            try {
+                # Reject unexpected existing content BEFORE asking for ISO.
+                $null = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $inactiveRecovery
+                $restoreImage = Get-CSISOImage
+                if ($restoreImage) {
+                    $restorePreview = Get-CSInPlaceRestorePreview $disk $c $parts `
+                        $reInfo $inactiveRecovery $restoreImage
+                    Write-Host ''
+                    Write-Host ('=== ' + $m.CSInPlacePreviewTitle + ' ===') -ForegroundColor Cyan
+                    Write-Host ($m.CSInPlaceTarget -f $disk.Number,
+                        $inactiveRecovery.PartitionNumber)
+                    Write-Host ($m.CSInPlaceImage -f
+                        (Format-DetailedSize $restorePreview.SourceBytes))
+                    Write-Host ($m.CSInPlaceFreeBefore -f
+                        (Format-DetailedSize $restorePreview.FreeBefore))
+                    Write-Host ($m.CSInPlaceFreeAfter -f
+                        (Format-DetailedSize $restorePreview.FreeAfterCopy))
+                    Write-Host ($m.CSInPlaceRequiredFree -f
+                        (Format-DetailedSize $restorePreview.RequiredFree),
+                        (Format-DetailedSize $restorePreview.ExtraReserve))
+                    Write-Host $m.CSInPlaceNoRepartition -ForegroundColor DarkGray
+                    if (Read-YesNo $m.CSInPlaceApplyQuestion) {
+                        Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
+                            $inactiveRecovery $restoreImage $restorePreview
+                        Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
+                            -CleanupAudits @()
+                        $script:CSStagingCleanupAllowed = $true
+                    } else { Write-Host $m.CSExecCancelled -ForegroundColor Yellow }
+                } else {
+                    Write-Host $m.CSInPlaceSourceSkipped -ForegroundColor DarkGray
+                }
+            } catch {
+                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                # No other repair plan is attempted after an in-place failure.
+                Write-Host ($m.CSInPlaceUnable -f $_.Exception.Message) -ForegroundColor Yellow
+            }
+            $script:CSRunHandled = $true
+            return
+        }
     }
 
     # Disabled WinRE with one valid image on a separate Recovery partition of

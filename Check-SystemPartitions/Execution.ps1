@@ -1604,6 +1604,234 @@ function Invoke-CSCreateMissingRecovery {
     }
 }
 
+# A recovery image can be restored to an EXISTING, unregistered partition
+# without changing its size/position. The older Windows servicing thresholds
+# are intentionally separate from the 250 MiB policy for new/rebuilt Recovery.
+function Get-CSInPlaceRequiredFree($partition) {
+    $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+    $build = [int]$cv.CurrentBuildNumber
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $oldWindows = $false
+    if ([int]$os.ProductType -eq 1) { $oldWindows = ($build -lt 19041) }
+    else { $oldWindows = ($build -lt 20348) }
+    if ($oldWindows) {
+        if ([int64]$partition.Size -lt 500MB) { return [int64]50MB }
+        if ([int64]$partition.Size -le 1GB) { return [int64]320MB }
+        return [int64]1GB
+    }
+    # More conservative than the documented 200 MiB for recent Windows.
+    return [int64]250MB
+}
+
+function Assert-CSInPlaceEmptyWimTarget([string]$root) {
+    # An empty Recovery partition may have only System Volume Information.
+    # Permit standard WinRE folders/files, but never overwrite an existing WIM
+    # or touch unknown OEM data, directories, or reparse points.
+    foreach ($entry in @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)) {
+        if ($entry.Name -notin @('Recovery','System Volume Information','$RECYCLE.BIN') -or
+            -not $entry.PSIsContainer -or
+            (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw ($m.CSExecRecoveryUnexpected -f $entry.Name)
+        }
+    }
+    $recovery = Join-Path $root 'Recovery'
+    if ([IO.Directory]::Exists($recovery)) {
+        foreach ($entry in @(Get-ChildItem -LiteralPath $recovery -Force -ErrorAction Stop)) {
+            if ($entry.Name -ne 'WindowsRE' -or -not $entry.PSIsContainer -or
+                (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                throw ($m.CSExecRecoveryUnexpected -f (Join-Path 'Recovery' $entry.Name))
+            }
+        }
+    }
+    $folder = Join-Path $recovery 'WindowsRE'
+    if ([IO.Directory]::Exists($folder)) {
+        # Only an EMPTY WindowsRE directory is eligible for this initial
+        # non-destructive restore. Existing configuration or OEM content must
+        # be reviewed separately; REAgentC could otherwise modify those files.
+        foreach ($entry in @(Get-ChildItem -LiteralPath $folder -Force -ErrorAction Stop)) {
+            if ($entry.Name -ieq 'Winre.wim') { throw $m.CSInPlaceAlreadyExists }
+            throw ($m.CSExecRecoveryUnexpected -f (Join-Path 'Recovery\WindowsRE' $entry.Name))
+        }
+    }
+    if ([IO.File]::Exists((Join-Path $folder 'Winre.wim'))) {
+        throw $m.CSInPlaceAlreadyExists
+    }
+    return $folder
+}
+
+function Assert-CSInPlaceRestorePreflight($disk, $c, $parts, $reInfo, $candidate) {
+    Assert-CSBasicDisk $disk $parts
+    Assert-CSPendingRebootClear
+    Assert-CSBitLockerOff
+    if ($reInfo.Enabled -or $disk.IsOffline -or $disk.IsReadOnly -or
+        -not $disk.IsBoot) { throw $m.CSInactiveStateChanged }
+    $liveDisk = Get-Disk -Number ([int]$disk.Number) -ErrorAction Stop
+    if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId -or
+        [int64]$liveDisk.Size -ne [int64]$disk.Size -or
+        [string]$liveDisk.PartitionStyle -ne [string]$disk.PartitionStyle) {
+        throw $m.CSExecLayoutChanged
+    }
+    $liveC = Get-Partition -DriveLetter C -ErrorAction Stop
+    if ([int]$liveC.DiskNumber -ne [int]$disk.Number -or
+        [int64]$liveC.Offset -ne [int64]$c.Offset -or
+        [int64]$liveC.Size -ne [int64]$c.Size) { throw $m.CSExecLayoutChanged }
+    $liveParts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop |
+        Sort-Object Offset)
+    $now = Get-WinReSnapshot
+    $liveCandidate = Get-CSInactiveRecoveryCandidate $liveDisk $liveC $liveParts $now
+    if ($null -eq $liveCandidate -or
+        [int]$liveCandidate.PartitionNumber -ne [int]$candidate.PartitionNumber -or
+        [int64]$liveCandidate.Offset -ne [int64]$candidate.Offset -or
+        [int64]$liveCandidate.Size -ne [int64]$candidate.Size -or
+        [string]$liveCandidate.Guid -ne [string]$candidate.Guid -or
+        [string]$liveCandidate.GptType -ne [string]$candidate.GptType) {
+        throw $m.CSInactiveStateChanged
+    }
+    $volume = Get-Volume -Partition $liveCandidate -ErrorAction Stop
+    if ([string]$volume.FileSystem -ne 'NTFS' -or
+        [string]$volume.HealthStatus -notin @('Healthy','0') -or
+        [int64]$volume.Size -le 0 -or
+        [int64]$volume.SizeRemaining -lt 0 -or
+        [int64]$volume.SizeRemaining -gt [int64]$volume.Size) {
+        throw $m.CSInactiveVolumeUnsafe
+    }
+    try {
+        $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$liveCandidate.PartitionNumber)
+        $null = Assert-CSInPlaceEmptyWimTarget $root
+    } finally {
+        if ($script:CSExecMount) { Close-CSRecoveryMount ([int]$disk.Number) }
+    }
+    return $volume
+}
+
+function Get-CSInPlaceRestorePreview($disk, $c, $parts, $reInfo, $candidate, [string]$image) {
+    if (-not $image -or -not [IO.File]::Exists($image) -or
+        -not $script:CSISOImagePath -or
+        $image -ine [string]$script:CSISOImagePath) {
+        throw $m.CSExecImageMissing
+    }
+    Assert-CSWim $image
+    $sourceBytes = [int64](Get-Item -LiteralPath $image -Force -ErrorAction Stop).Length
+    $volume = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $candidate
+    $minimum = [int64](Get-CSInPlaceRequiredFree $candidate)
+    # Allow for boot.sdi and REAgentC metadata in addition to the policy minimum.
+    $extra = [int64]4MB
+    $free = [int64]$volume.SizeRemaining
+    $afterCopy = [int64]($free - $sourceBytes)
+    if ($afterCopy -lt ($minimum + $extra)) {
+        throw ($m.CSInPlaceNotEnough -f (Format-DetailedSize $free),
+            (Format-DetailedSize $sourceBytes),
+            (Format-DetailedSize ($minimum + $extra)))
+    }
+    return [pscustomobject]@{
+        SourceBytes = $sourceBytes
+        SourceHash = (Get-CSFileSha256 $image)
+        FreeBefore = $free
+        FreeAfterCopy = $afterCopy
+        RequiredFree = $minimum
+        ExtraReserve = $extra
+    }
+}
+
+function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate,
+        [string]$image, $preview) {
+    $script:CSExecMutated = $false
+    $script:CSExecLastSucceeded = $false
+    $script:CSExecErrorReportedMessage = $null
+    # Recreate preview and revalidate from the live disk immediately before
+    # doing anything to the target filesystem.
+    $nowPreview = Get-CSInPlaceRestorePreview $disk $c $parts $reInfo $candidate $image
+    if ([string]$nowPreview.SourceHash -ne [string]$preview.SourceHash -or
+        [int64]$nowPreview.SourceBytes -ne [int64]$preview.SourceBytes) {
+        throw $m.CSExecHashMismatch
+    }
+    $snapshot = @($parts | Sort-Object Offset | ForEach-Object {
+        [pscustomobject]@{
+            PartitionNumber = [int]$_.PartitionNumber
+            Offset = [int64]$_.Offset; Size = [int64]$_.Size
+            GptType = [string]$_.GptType; MbrType = [string]$_.MbrType
+            IsActive = [bool]$_.IsActive
+        }
+    })
+    Assert-CSLayoutUnchanged $disk $snapshot
+    $temp = $null
+    try {
+        $part = Get-Partition -DiskNumber ([int]$disk.Number) `
+            -PartitionNumber ([int]$candidate.PartitionNumber) -ErrorAction Stop
+        try {
+            $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$part.PartitionNumber)
+            $folder = Assert-CSInPlaceEmptyWimTarget $root
+            $volume = Get-Volume -Partition $part -ErrorAction Stop
+            if ([int64]$volume.SizeRemaining -lt
+                ([int64]$preview.SourceBytes + [int64]$preview.RequiredFree +
+                 [int64]$preview.ExtraReserve)) { throw $m.CSExecRecoveryTooSmall }
+            # No destructive operations. The new image is copied to a private
+            # temporary name and SHA-256 checked before same-volume rename.
+            [void](New-Item -Path (Join-Path $root 'Recovery') `
+                -ItemType Directory -Force -ErrorAction Stop)
+            [void](New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop)
+            $temp = Join-Path $folder ('PSWinKit-Winre-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            $script:CSExecMutated = $true
+            Write-Host $m.CSInPlaceCopying -ForegroundColor Cyan
+            Copy-Item -LiteralPath $image -Destination $temp -ErrorAction Stop
+            if ((Get-CSFileSha256 $temp) -ne [string]$preview.SourceHash) {
+                throw $m.CSExecHashMismatch
+            }
+            $after = Get-Volume -Partition $part -ErrorAction Stop
+            if ([int64]$after.SizeRemaining -lt
+                ([int64]$preview.RequiredFree + [int64]$preview.ExtraReserve)) {
+                throw $m.CSExecRecoveryTooSmall
+            }
+            $destination = Join-Path $folder 'Winre.wim'
+            if ([IO.File]::Exists($destination)) { throw $m.CSInPlaceAlreadyExists }
+            Move-Item -LiteralPath $temp -Destination $destination -ErrorAction Stop
+            $temp = $null
+            if ((Get-CSFileSha256 $destination) -ne [string]$preview.SourceHash) {
+                throw $m.CSExecHashMismatch
+            }
+            # Do not attempt registration when the image did not fit with the
+            # minimum free-space reserve and budget for boot.sdi.
+            Write-Host ($m.CSExecSetReimage -f $folder)
+            Invoke-CSExternal 'reagentc.exe' @('/setreimage','/path',$folder)
+            Write-Host $m.CSExecEnableReagentc
+            Invoke-CSExternal 'reagentc.exe' @('/enable')
+            $enabled = Get-WinReSnapshot
+            if (-not $enabled.Enabled -or
+                $null -eq $enabled.DiskNumber -or $null -eq $enabled.PartitionNumber -or
+                [int]$enabled.DiskNumber -ne [int]$disk.Number -or
+                [int]$enabled.PartitionNumber -ne [int]$part.PartitionNumber) {
+                throw $m.CSExecWinRENotRegistered
+            }
+            $finalVolume = Get-Volume -Partition $part -ErrorAction Stop
+            if ([int64]$finalVolume.SizeRemaining -lt [int64]$preview.RequiredFree) {
+                throw $m.CSExecRecoveryTooSmall
+            }
+        } finally {
+            if ($temp -and [IO.File]::Exists($temp)) {
+                try { Remove-Item -LiteralPath $temp -Force -ErrorAction Stop }
+                catch { Write-Warning ($m.CSInPlaceTempRetained -f $temp) }
+            }
+            if ($script:CSExecMount) { Close-CSRecoveryMount ([int]$disk.Number) }
+        }
+        Assert-CSLayoutUnchanged $disk $snapshot
+        $confirmed = Get-WinReSnapshot
+        if (-not $confirmed.Enabled -or
+            $null -eq $confirmed.DiskNumber -or $null -eq $confirmed.PartitionNumber -or
+            [int]$confirmed.DiskNumber -ne [int]$disk.Number -or
+            [int]$confirmed.PartitionNumber -ne [int]$candidate.PartitionNumber) {
+            throw $m.CSExecWinRENotRegistered
+        }
+        $script:CSExecLastSucceeded = $true
+        Write-Host ($m.CSInPlaceSuccess -f $candidate.PartitionNumber) -ForegroundColor Green
+    } catch {
+        $script:CSExecErrorReportedMessage = $_.Exception.Message
+        if ($script:CSExecMutated) {
+            Write-Host $m.CSInPlaceFailureRetain -ForegroundColor Yellow
+        }
+        throw
+    }
+}
+
 # Register a validated, inactive WinRE from the physical Windows disk.
 # No partition or image changes are performed by this function.
 
