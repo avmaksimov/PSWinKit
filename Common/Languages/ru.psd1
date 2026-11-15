@@ -510,7 +510,6 @@
         CSMachinePhysical = 'физический компьютер'
         CSMachineUnknown = 'не определён (определение виртуализации недоступно)'
         CSMachineDetectionNotice = 'Если тип компьютера определён неверно, сообщите разработчику PSWinKit и не подтверждайте изменение разделов.'
-        CSInPlaceFindSource = 'Recovery (раздел {0}) не содержит проверенного образа. Найти совместимый ISO и проверить возможность восстановления на этом же разделе?'
         CSInPlacePreviewTitle = 'Восстановление Windows RE в существующем Recovery'
         CSInPlaceTarget = 'Целевой Recovery: диск {0}, раздел {1}.'
         CSInPlaceImage = 'Проверенный Winre.wim: {0}.'

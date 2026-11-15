@@ -510,7 +510,6 @@
         CSMachinePhysical = 'Physical computer'
         CSMachineUnknown = 'Unknown (virtualization detection unavailable)'
         CSMachineDetectionNotice = 'If the computer type is incorrect, report it to the PSWinKit developer and do not approve partition changes.'
-        CSInPlaceFindSource = 'Recovery partition {0} has no verified image. Find matching installation media and check an in-place restore?'
         CSInPlacePreviewTitle = 'Restore Windows RE to existing Recovery partition'
         CSInPlaceTarget = 'Target Recovery: disk {0}, partition {1}.'
         CSInPlaceImage = 'Validated Winre.wim: {0}.'

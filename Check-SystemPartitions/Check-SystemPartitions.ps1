@@ -917,47 +917,45 @@ try {
     if ($null -ne $inactiveRecovery -and -not $assessment.Verified -and
         -not $reInfo.Enabled) {
         Write-Host ''
-        if (Read-YesNo ($m.CSInPlaceFindSource -f $inactiveRecovery.PartitionNumber)) {
-            $restoreImage = $null
-            try {
-                # Reject unexpected existing content BEFORE asking for ISO.
-                $null = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $inactiveRecovery
-                $restoreImage = Get-CSISOImage
-                if ($restoreImage) {
-                    $restorePreview = Get-CSInPlaceRestorePreview $disk $c $parts `
-                        $reInfo $inactiveRecovery $restoreImage
-                    Write-Host ''
-                    Write-Host ('=== ' + $m.CSInPlacePreviewTitle + ' ===') -ForegroundColor Cyan
-                    Write-Host ($m.CSInPlaceTarget -f $disk.Number,
-                        $inactiveRecovery.PartitionNumber)
-                    Write-Host ($m.CSInPlaceImage -f
-                        (Format-DetailedSize $restorePreview.SourceBytes))
-                    Write-Host ($m.CSInPlaceFreeBefore -f
-                        (Format-DetailedSize $restorePreview.FreeBefore))
-                    Write-Host ($m.CSInPlaceFreeAfter -f
-                        (Format-DetailedSize $restorePreview.FreeAfterCopy))
-                    Write-Host ($m.CSInPlaceRequiredFree -f
-                        (Format-DetailedSize $restorePreview.RequiredFree),
-                        (Format-DetailedSize $restorePreview.ExtraReserve))
-                    Write-Host $m.CSInPlaceNoRepartition -ForegroundColor DarkGray
-                    if (Read-YesNo $m.CSInPlaceApplyQuestion) {
-                        Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
-                            $inactiveRecovery $restoreImage $restorePreview
-                        Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
-                            -CleanupAudits @()
-                        $script:CSStagingCleanupAllowed = $true
-                    } else { Write-Host $m.CSExecCancelled -ForegroundColor Yellow }
-                } else {
-                    Write-Host $m.CSInPlaceSourceSkipped -ForegroundColor DarkGray
-                }
-            } catch {
-                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
-                # No other repair plan is attempted after an in-place failure.
-                Write-Host ($m.CSInPlaceUnable -f $_.Exception.Message) -ForegroundColor Yellow
+        $restoreImage = $null
+        try {
+            # Reject unexpected existing content BEFORE searching for ISO.
+            $null = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $inactiveRecovery
+            $restoreImage = Get-CSISOImage
+            if ($restoreImage) {
+                $restorePreview = Get-CSInPlaceRestorePreview $disk $c $parts `
+                    $reInfo $inactiveRecovery $restoreImage
+                Write-Host ''
+                Write-Host ('=== ' + $m.CSInPlacePreviewTitle + ' ===') -ForegroundColor Cyan
+                Write-Host ($m.CSInPlaceTarget -f $disk.Number,
+                    $inactiveRecovery.PartitionNumber)
+                Write-Host ($m.CSInPlaceImage -f
+                    (Format-DetailedSize $restorePreview.SourceBytes))
+                Write-Host ($m.CSInPlaceFreeBefore -f
+                    (Format-DetailedSize $restorePreview.FreeBefore))
+                Write-Host ($m.CSInPlaceFreeAfter -f
+                    (Format-DetailedSize $restorePreview.FreeAfterCopy))
+                Write-Host ($m.CSInPlaceRequiredFree -f
+                    (Format-DetailedSize $restorePreview.RequiredFree),
+                    (Format-DetailedSize $restorePreview.ExtraReserve))
+                Write-Host $m.CSInPlaceNoRepartition -ForegroundColor DarkGray
+                if (Read-YesNo $m.CSInPlaceApplyQuestion) {
+                    Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
+                        $inactiveRecovery $restoreImage $restorePreview
+                    Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
+                        -CleanupAudits @()
+                    $script:CSStagingCleanupAllowed = $true
+                } else { Write-Host $m.CSExecCancelled -ForegroundColor Yellow }
+            } else {
+                Write-Host $m.CSInPlaceSourceSkipped -ForegroundColor DarkGray
             }
-            $script:CSRunHandled = $true
-            return
+        } catch {
+            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+            # No other repair plan is attempted after an in-place failure.
+            Write-Host ($m.CSInPlaceUnable -f $_.Exception.Message) -ForegroundColor Yellow
         }
+        $script:CSRunHandled = $true
+        return
     }
 
     # Disabled WinRE with one valid image on a separate Recovery partition of
@@ -1424,7 +1422,9 @@ finally {
         # This is deliberately at the end, both for successful and failed runs.
         $stageReportSucceeded = $false
         try {
-            Show-CSExistingStages
+            # Stop-Utility already inserts a blank line before the Ctrl+C notice.
+            # Avoid doubling that separator after the Stage-* status message.
+            Show-CSExistingStages -OmitTrailingNewline:([bool]$utility.InterruptedByUser)
             $stageReportSucceeded = $true
         } catch {
             Write-Warning $_.Exception.Message

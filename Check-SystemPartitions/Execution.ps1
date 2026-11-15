@@ -70,10 +70,12 @@ function Invoke-CSCleanupStaging {
 }
 
 function Show-CSExistingStages {
+    param([switch]$OmitTrailingNewline)
     $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
     if (-not [IO.Directory]::Exists($base)) {
         Write-Host ''
-        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray
+        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray `
+            -NoNewline:$OmitTrailingNewline
         return
     }
     $root = Get-Item -LiteralPath $base -Force -ErrorAction Stop
@@ -86,7 +88,8 @@ function Show-CSExistingStages {
         Sort-Object CreationTime)
     if ($dirs.Count -eq 0) {
         Write-Host ''
-        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray
+        Write-Host ($m.CSStageNone -f $base) -ForegroundColor DarkGray `
+            -NoNewline:$OmitTrailingNewline
         return
     }
     Write-Host ''
