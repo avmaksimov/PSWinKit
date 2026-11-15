@@ -162,17 +162,25 @@ function Get-CSSplitWimPattern([string]$source) {
 }
 
 function Get-CSMountedISOOrigin([string]$letter) {
-    try {
-        $cd = @(Get-CimInstance Win32_CDROMDrive -ErrorAction Stop |
-            Where-Object { ([string]$_.Drive).TrimEnd(':') -ieq $letter } |
-            Select-Object -First 1)
-        if ($cd.Count -ne 1) { return $null }
-        $image = Get-DiskImage -DevicePath ([string]$cd[0].DeviceID) -ErrorAction Stop
-        if ($image.Attached -and [string]$image.ImagePath -match '(?i)\.iso$' -and
-            [IO.File]::Exists([string]$image.ImagePath)) {
-            return [string]$image.ImagePath
-        }
-    } catch { }
+    if ($letter -notmatch '^[A-Za-z]$') { return $null }
+    # Win32_CDROMDrive.DeviceID is a PnP identifier (SCSI\CDROM&...), NOT
+    # the device path accepted by Get-DiskImage. Resolve \\.\CDROMn via its
+    # actual mounted volume; this also works for guest-mounted network ISOs.
+    foreach ($number in 0..31) {
+        try {
+            $image = Get-DiskImage -DevicePath ('\\.\CDROM{0}' -f $number) -ErrorAction Stop
+            if (-not $image.Attached -or
+                [string]$image.ImagePath -notmatch '(?i)\.iso$' -or
+                -not [IO.File]::Exists([string]$image.ImagePath)) { continue }
+            $volumes = @($image | Get-Volume -ErrorAction Stop)
+            foreach ($volume in $volumes) {
+                if ([string]$volume.DriveLetter -ieq $letter) {
+                    return [string]$image.ImagePath
+                }
+            }
+        } catch { } # The CDROM number may not exist or may not be an ISO.
+    }
+    # Physical/host-managed DVD: its ISO path is not available in the guest.
     return $null
 }
 
@@ -387,6 +395,9 @@ function Get-CSISOImage {
     if ($null -eq $selected) { return $null }
     $source = [string]$selected.Source
     $isoPath = [string]$selected.ISOPath
+    # Prefer a verified DFS UNC alias over the SMB referral target returned
+    # by Get-DiskImage (e.g. \\domain\namespace rather than \\server\share).
+    if ($isoPath) { $isoPath = Resolve-PSWinKitPreferredISOPath $isoPath }
     Write-Host ($m.CSIsoInstallFile -f $source)
     # This performs the authoritative compatibility check, independent of the cache.
     $index = if ($selected.PSObject.Properties['VerifiedIndex']) {

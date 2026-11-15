@@ -35,6 +35,112 @@ function Resolve-PSWinKitISOPath([string]$path) {
     return $full
 }
 
+# A network ISO mounted through DFS can be reported by Get-DiskImage as its
+# referral target (\\server\\share), losing the stable DFS namespace spelling.
+# Try configured SMB drive roots as aliases, but NEVER substitute an unverified
+# file just because its name exists: compare metadata and first/last 64 KiB.
+# The catalogue is advisory; installation indexes are revalidated on use.
+function Test-PSWinKitISOAlias([string]$source, [string]$candidate) {
+    try {
+        $first = Get-Item -LiteralPath $source -Force -ErrorAction Stop
+        $second = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop
+        if ($first.PSIsContainer -or $second.PSIsContainer -or
+            [int64]$first.Length -ne [int64]$second.Length -or
+            $first.LastWriteTimeUtc.Ticks -ne $second.LastWriteTimeUtc.Ticks) { return $false }
+        $sample = [int][Math]::Min(65536L, [int64]$first.Length)
+        $a = [IO.File]::Open($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            $b = [IO.File]::Open($candidate, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try {
+                $bufA = New-Object byte[] $sample
+                $bufB = New-Object byte[] $sample
+                $offsets = @([int64]0)
+                if ([int64]$first.Length -gt $sample) {
+                    $offsets += ([int64]$first.Length - $sample)
+                }
+                foreach ($offset in $offsets) {
+                    [void]$a.Seek([int64]$offset, [IO.SeekOrigin]::Begin)
+                    [void]$b.Seek([int64]$offset, [IO.SeekOrigin]::Begin)
+                    $readA = 0
+                    $readB = 0
+                    while ($readA -lt $sample) {
+                        $count = $a.Read($bufA, $readA, $sample - $readA)
+                        if ($count -le 0) { return $false }
+                        $readA += $count
+                    }
+                    while ($readB -lt $sample) {
+                        $count = $b.Read($bufB, $readB, $sample - $readB)
+                        if ($count -le 0) { return $false }
+                        $readB += $count
+                    }
+                    for ($i = 0; $i -lt $sample; $i++) {
+                        if ($bufA[$i] -ne $bufB[$i]) { return $false }
+                    }
+                }
+                return $true
+            } finally { $b.Dispose() }
+        } finally { $a.Dispose() }
+    } catch { return $false }
+}
+
+function Resolve-PSWinKitPreferredISOPath([string]$path) {
+    # Only a UNC backing path can be translated to a different mapped DFS root.
+    if ($path -notmatch '^\\\\[^\\]+\\[^\\]+\\(.+\.iso)$') { return $path }
+    $relative = $matches[1]
+    $roots = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    try {
+        foreach ($mapping in @(Get-SmbMapping -ErrorAction Stop)) {
+            if ([string]$mapping.LocalPath -match '^[A-Za-z]:$' -and
+                [string]$mapping.RemotePath -match '^\\\\[^\\]+\\[^\\]+') {
+                [void]$roots.Add(([string]$mapping.RemotePath).TrimEnd('\'))
+            }
+        }
+    } catch { }
+    # CIM fallback, including Windows versions where SMB mapping is not exposed.
+    try {
+        foreach ($drive in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=4' -ErrorAction Stop)) {
+            if ([string]$drive.ProviderName -match '^\\\\[^\\]+\\[^\\]+') {
+                [void]$roots.Add(([string]$drive.ProviderName).TrimEnd('\'))
+            }
+        }
+    } catch { }
+    # Explicit PowerShell mounts and persistent drive mappings can remain
+    # visible here even when an elevated process does not see the SMB session.
+    try {
+        foreach ($drive in @(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop)) {
+            $remote = [string]$drive.DisplayRoot
+            if ($remote -match '^\\\\[^\\]+\\[^\\]+') {
+                [void]$roots.Add($remote.TrimEnd('\'))
+            }
+        }
+    } catch { }
+    try {
+        foreach ($key in @(Get-ChildItem -LiteralPath 'HKCU:\Network' -ErrorAction Stop)) {
+            $remote = [string](Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction Stop).RemotePath
+            if ($remote -match '^\\\\[^\\]+\\[^\\]+') {
+                [void]$roots.Add($remote.TrimEnd('\'))
+            }
+        }
+    } catch { }
+    if ($roots.Count -eq 0) { return $path }
+
+    # Domain DFS namespaces have a domain name in the host position; prefer
+    # those over another physical file server when both aliases are available.
+    $domain = ''
+    try { $domain = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).Domain } catch { }
+    $candidates = @($roots | ForEach-Object {
+        $root = [string]$_
+        $hostName = ($root.TrimStart('\') -split '\\', 2)[0]
+        [pscustomobject]@{ Root=$root; Score=[int]($domain -and $hostName -ieq $domain) }
+    } | Sort-Object @{Expression='Score';Descending=$true}, Root)
+    foreach ($entry in $candidates) {
+        $candidate = [string]$entry.Root + '\' + $relative
+        if ($candidate -ieq $path) { continue }
+        if (Test-PSWinKitISOAlias $path $candidate) { return $candidate }
+    }
+    return $path
+}
+
 function Test-PSWinKitImageCatalogFileName([string]$name, [string]$extension) {
     $pattern = '^images_([0-9a-fA-F]{32})\.' + [regex]::Escape($extension) + '$'
     return ($name -cmatch $pattern)
