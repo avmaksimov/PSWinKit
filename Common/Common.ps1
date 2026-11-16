@@ -326,7 +326,11 @@ function Get-PSWinKitUserFolderSnapshot {
         $userFolders = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop
         foreach ($key in $registryNames.Keys) {
             if ($paths.ContainsKey($key)) { continue }
-            $value = [string]$userFolders.($registryNames[$key])
+            # A registry value may be absent; do not lose other known folders.
+            $registryName = [string]$registryNames[$key]
+            $registryProperty = $userFolders.PSObject.Properties[$registryName]
+            if ($null -eq $registryProperty) { continue }
+            $value = [string]$registryProperty.Value
             if (-not [string]::IsNullOrWhiteSpace($value)) {
                 $expanded = [Environment]::ExpandEnvironmentVariables($value)
                 if (Test-Path -LiteralPath $expanded -PathType Container -ErrorAction SilentlyContinue) {
