@@ -896,17 +896,26 @@ try {
         Write-Host $m.CSActiveRecoveryUnknown -ForegroundColor Yellow
     }
 
-    # Missing Winre.wim on a UNIQUE inactive Recovery: offer restoration into
-    # that same partition. On a VM this is the only offered recovery repair;
-    # never create a new Recovery after C:.
-    if ($null -ne $inactiveRecovery -and -not $assessment.Verified -and
-        -not $reInfo.Enabled) {
+    # Missing or invalid Winre.wim on a UNIQUE inactive Recovery: restore
+    # it in place, preserving standard Windows RE settings and OEM safety.
+    # Also handle an existing Recovery when the only verified image is local
+    # to C: (there is no valid WIM on the target Recovery).
+    # On a VM do not create a new Recovery after C:.
+    if ($null -ne $inactiveRecovery -and -not $reInfo.Enabled -and
+        (-not $assessment.Verified -or $null -eq $assessment.Existing)) {
         Write-Host ''
         $restoreImage = $null
         try {
             # Reject unexpected existing content BEFORE searching for ISO.
             $null = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $inactiveRecovery
-            $restoreImage = Get-CSISOImage
+            $localSource = Join-Path $env:windir 'System32\Recovery\Winre.wim'
+            if ($assessment.Verified -and $null -eq $assessment.Existing -and
+                [string]$assessment.ImagePath -ieq [string]$localSource -and
+                [IO.File]::Exists($localSource)) {
+                $restoreImage = $localSource
+            } else {
+                $restoreImage = Get-CSISOImage
+            }
             if ($restoreImage) {
                 $restorePreview = Get-CSInPlaceRestorePreview $disk $c $parts `
                     $reInfo $inactiveRecovery $restoreImage
@@ -923,8 +932,16 @@ try {
                 Write-Host ($m.CSInPlaceRequiredFree -f
                     (Format-DetailedSize $restorePreview.RequiredFree),
                     (Format-DetailedSize $restorePreview.ExtraReserve))
+                if ($restorePreview.OriginalExists) {
+                    Write-Host ($m.CSInPlaceReplaceDetected -f
+                        (Format-DetailedSize $restorePreview.OriginalBytes)) -ForegroundColor Yellow
+                }
                 Write-Host $m.CSInPlaceNoRepartition -ForegroundColor DarkGray
-                if ((Read-PSWinKitChoice -Prompt $m.CSInPlaceApplyQuestion -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y') {
+                $question = if ($restorePreview.OriginalExists) {
+                    $m.CSInPlaceReplaceQuestion
+                } else { $m.CSInPlaceApplyQuestion }
+                if ((Read-PSWinKitChoice -Prompt $question -Choices @('Y', 'N') `
+                        -Messages $utility.CommonMessages) -eq 'Y') {
                     Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
                         $inactiveRecovery $restoreImage $restorePreview
                     Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `

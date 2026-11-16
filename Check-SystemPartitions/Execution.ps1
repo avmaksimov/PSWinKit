@@ -1629,10 +1629,10 @@ function Get-CSInPlaceRequiredFree($partition) {
     return [int64]250MB
 }
 
-function Assert-CSInPlaceEmptyWimTarget([string]$root) {
-    # An empty Recovery partition may have only System Volume Information.
-    # Permit standard WinRE folders/files, but never overwrite an existing WIM
-    # or touch unknown OEM data, directories, or reparse points.
+function Get-CSInPlaceWimTarget([string]$root) {
+    # No OEM files, reparse points, unexpected directories or registered WIMs.
+    # The inactive Recovery may contain standard WinRE settings which must be
+    # retained and backed up, not formatted away.
     foreach ($entry in @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)) {
         if ($entry.Name -notin @('Recovery','System Volume Information','$RECYCLE.BIN') -or
             -not $entry.PSIsContainer -or
@@ -1650,19 +1650,45 @@ function Assert-CSInPlaceEmptyWimTarget([string]$root) {
         }
     }
     $folder = Join-Path $recovery 'WindowsRE'
+    $wim = Join-Path $folder 'Winre.wim'
+    $hasWim = $false
     if ([IO.Directory]::Exists($folder)) {
-        # Only an EMPTY WindowsRE directory is eligible for this initial
-        # non-destructive restore. Existing configuration or OEM content must
-        # be reviewed separately; REAgentC could otherwise modify those files.
+        $allowed = @('Winre.wim','ReAgent.xml','boot.sdi','SrSettings.ini',
+            'WifiSettings.ini','ReCustomization.xml','ReAgent.old')
         foreach ($entry in @(Get-ChildItem -LiteralPath $folder -Force -ErrorAction Stop)) {
-            if ($entry.Name -ieq 'Winre.wim') { throw $m.CSInPlaceAlreadyExists }
-            throw ($m.CSExecRecoveryUnexpected -f (Join-Path 'Recovery\WindowsRE' $entry.Name))
+            if ($entry.PSIsContainer -or $entry.Name -notin $allowed -or
+                (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                throw ($m.CSExecRecoveryUnexpected -f (Join-Path 'Recovery\WindowsRE' $entry.Name))
+            }
+            if ($entry.Name -ieq 'Winre.wim') { $hasWim = $true }
         }
     }
-    if ([IO.File]::Exists((Join-Path $folder 'Winre.wim'))) {
-        throw $m.CSInPlaceAlreadyExists
+    if ($hasWim) {
+        # If image validation tooling is unavailable, NEVER classify a file
+        # as corrupt and replace it merely because Get-WindowsImage failed.
+        Import-Module Dism -ErrorAction Stop
+        # A valid existing image is never overwritten. A corrupt image may be
+        # replaced only if it can first be fully read, hashed and backed up.
+        try {
+            Assert-CSWim $wim
+            throw $m.CSInPlaceAlreadyValid
+        } catch {
+            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException] -or
+                $_.Exception.Message -eq $m.CSInPlaceAlreadyValid) { throw }
+        }
+        $item = Get-Item -LiteralPath $wim -Force -ErrorAction Stop
+        if ($item -isnot [IO.FileInfo] -or
+            (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw $m.CSExecImageInvalid
+        }
     }
-    return $folder
+    return [pscustomobject]@{
+        Folder = $folder
+        WIM = $wim
+        Existing = [bool]$hasWim
+        ExistingBytes = if ($hasWim) { [int64](Get-Item -LiteralPath $wim -Force).Length } else { [int64]0 }
+        ExistingHash = if ($hasWim) { Get-CSFileSha256 $wim } else { '' }
+    }
 }
 
 function Assert-CSInPlaceRestorePreflight($disk, $c, $parts, $reInfo, $candidate) {
@@ -1703,22 +1729,23 @@ function Assert-CSInPlaceRestorePreflight($disk, $c, $parts, $reInfo, $candidate
     }
     try {
         $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$liveCandidate.PartitionNumber)
-        $null = Assert-CSInPlaceEmptyWimTarget $root
+        $target = Get-CSInPlaceWimTarget $root
     } finally {
         if ($script:CSExecMount) { Close-CSRecoveryMount ([int]$disk.Number) }
     }
-    return $volume
+    return [pscustomobject]@{ Volume = $volume; Target = $target }
 }
 
 function Get-CSInPlaceRestorePreview($disk, $c, $parts, $reInfo, $candidate, [string]$image) {
     if (-not $image -or -not [IO.File]::Exists($image) -or
-        -not $script:CSISOImagePath -or
-        $image -ine [string]$script:CSISOImagePath) {
+        (([string]$image -ine [string]$script:CSISOImagePath) -and
+         ([string]$image -ine [string](Join-Path $env:windir 'System32\Recovery\Winre.wim')))) {
         throw $m.CSExecImageMissing
     }
     Assert-CSWim $image
     $sourceBytes = [int64](Get-Item -LiteralPath $image -Force -ErrorAction Stop).Length
-    $volume = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $candidate
+    $checked = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $candidate
+    $volume = $checked.Volume
     $minimum = [int64](Get-CSInPlaceRequiredFree $candidate)
     # Allow for boot.sdi and REAgentC metadata in addition to the policy minimum.
     $extra = [int64]4MB
@@ -1736,7 +1763,35 @@ function Get-CSInPlaceRestorePreview($disk, $c, $parts, $reInfo, $candidate, [st
         FreeAfterCopy = $afterCopy
         RequiredFree = $minimum
         ExtraReserve = $extra
+        OriginalExists = [bool]$checked.Target.Existing
+        OriginalHash = [string]$checked.Target.ExistingHash
+        OriginalBytes = [int64]$checked.Target.ExistingBytes
     }
+}
+
+function Save-CSInPlaceOriginalRecovery([string]$folder) {
+    # Preserve the original (possibly invalid) WIM and all standard WinRE
+    # settings OUTSIDE Recovery before replacing anything on that volume.
+    $files = @(Get-ChildItem -LiteralPath $folder -File -Force -ErrorAction Stop)
+    $sum = [int64]0
+    foreach ($file in $files) { $sum += [int64]$file.Length }
+    $free = [int64](Get-Volume -DriveLetter C -ErrorAction Stop).SizeRemaining
+    if ($free -lt $sum + 1GB) { throw $m.CSExecStagingSpace }
+    $base = Join-Path $env:ProgramData 'PSWinKit\Check-SystemPartitions'
+    [void](New-Item -Path $base -ItemType Directory -Force -ErrorAction Stop)
+    if (((Get-Item -LiteralPath $base -Force).Attributes -band
+        [IO.FileAttributes]::ReparsePoint) -ne 0) { throw $m.CSStageUnsafeRoot }
+    $script:CSExecStaging = Join-Path $base ('Stage-' + [guid]::NewGuid().ToString('N'))
+    [void](New-Item -Path $script:CSExecStaging -ItemType Directory -ErrorAction Stop)
+    Protect-CSStagingDirectory $script:CSExecStaging
+    foreach ($file in $files) {
+        $saved = Join-Path $script:CSExecStaging $file.Name
+        Copy-Item -LiteralPath $file.FullName -Destination $saved -Force -ErrorAction Stop
+        if ((Get-CSFileSha256 $file.FullName) -ne (Get-CSFileSha256 $saved)) {
+            throw $m.CSExecHashMismatch
+        }
+    }
+    Write-Host ($m.CSInPlaceBackupSaved -f $script:CSExecStaging) -ForegroundColor Yellow
 }
 
 function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate,
@@ -1748,7 +1803,10 @@ function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate
     # doing anything to the target filesystem.
     $nowPreview = Get-CSInPlaceRestorePreview $disk $c $parts $reInfo $candidate $image
     if ([string]$nowPreview.SourceHash -ne [string]$preview.SourceHash -or
-        [int64]$nowPreview.SourceBytes -ne [int64]$preview.SourceBytes) {
+        [int64]$nowPreview.SourceBytes -ne [int64]$preview.SourceBytes -or
+        [bool]$nowPreview.OriginalExists -ne [bool]$preview.OriginalExists -or
+        [string]$nowPreview.OriginalHash -ne [string]$preview.OriginalHash -or
+        [int64]$nowPreview.OriginalBytes -ne [int64]$preview.OriginalBytes) {
         throw $m.CSExecHashMismatch
     }
     $snapshot = @($parts | Sort-Object Offset | ForEach-Object {
@@ -1766,7 +1824,13 @@ function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate
             -PartitionNumber ([int]$candidate.PartitionNumber) -ErrorAction Stop
         try {
             $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$part.PartitionNumber)
-            $folder = Assert-CSInPlaceEmptyWimTarget $root
+            $target = Get-CSInPlaceWimTarget $root
+            if ([bool]$target.Existing -ne [bool]$preview.OriginalExists -or
+                [string]$target.ExistingHash -ne [string]$preview.OriginalHash -or
+                [int64]$target.ExistingBytes -ne [int64]$preview.OriginalBytes) {
+                throw $m.CSExecHashMismatch
+            }
+            $folder = [string]$target.Folder
             $volume = Get-Volume -Partition $part -ErrorAction Stop
             if ([int64]$volume.SizeRemaining -lt
                 ([int64]$preview.SourceBytes + [int64]$preview.RequiredFree +
@@ -1777,6 +1841,16 @@ function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate
                 -ItemType Directory -Force -ErrorAction Stop)
             [void](New-Item -Path $folder -ItemType Directory -Force -ErrorAction Stop)
             $temp = Join-Path $folder ('PSWinKit-Winre-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            if ($target.Existing -or
+                @(Get-ChildItem -LiteralPath $folder -File -Force -ErrorAction Stop).Count -gt 0) {
+                Save-CSInPlaceOriginalRecovery $folder
+                # Verify again: an external process may change this file even
+                # between the backup and the atomic replacement.
+                if ($target.Existing -and
+                    (Get-CSFileSha256 $target.WIM) -ne [string]$preview.OriginalHash) {
+                    throw $m.CSExecHashMismatch
+                }
+            }
             $script:CSExecMutated = $true
             Write-Host $m.CSInPlaceCopying -ForegroundColor Cyan
             Copy-Item -LiteralPath $image -Destination $temp -ErrorAction Stop
@@ -1789,8 +1863,18 @@ function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate
                 throw $m.CSExecRecoveryTooSmall
             }
             $destination = Join-Path $folder 'Winre.wim'
-            if ([IO.File]::Exists($destination)) { throw $m.CSInPlaceAlreadyExists }
-            Move-Item -LiteralPath $temp -Destination $destination -ErrorAction Stop
+            if ($target.Existing) {
+                if (-not [IO.File]::Exists($destination) -or
+                    (Get-CSFileSha256 $destination) -ne [string]$preview.OriginalHash) {
+                    throw $m.CSExecHashMismatch
+                }
+                # Atomic NTFS replacement. The complete original was already
+                # backed up in the protected staging directory on C:.
+                [IO.File]::Replace($temp, $destination, $null)
+            } else {
+                if ([IO.File]::Exists($destination)) { throw $m.CSInPlaceAlreadyExists }
+                Move-Item -LiteralPath $temp -Destination $destination -ErrorAction Stop
+            }
             $temp = $null
             if ((Get-CSFileSha256 $destination) -ne [string]$preview.SourceHash) {
                 throw $m.CSExecHashMismatch
