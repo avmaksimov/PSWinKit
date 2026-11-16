@@ -459,12 +459,23 @@ function Get-RepairVolumes {
     }
     $snapshot = $utility.OriginalUserFolders
     if ($null -ne $snapshot -and $snapshot.Paths -is [Collections.IDictionary]) {
+        $unresolvedFolders = New-Object 'System.Collections.Generic.List[string]'
         foreach ($key in @('UserProfile','Downloads','Desktop','Documents','Pictures','Music','Videos','RoamingAppData','LocalAppData','TEMP')) {
             $value = [string]$snapshot.Paths[$key]
             if (-not [string]::IsNullOrWhiteSpace($value)) {
                 [void]$candidates.Add(@{ Name = [string]$labels[$key]; Path = $value; Prechecked = $true })
+            } else {
+                # A missing/unavailable user folder can hide an additional fixed disk.
+                # Report it in the main diagnostic window, after UAC and transcript start.
+                $unresolvedFolders.Add([string]$labels[$key])
             }
         }
+        if ($unresolvedFolders.Count -gt 0) {
+            Write-Warning ($script:RepairMessages.UserFoldersNotResolved -f
+                ([string]::Join(', ', $unresolvedFolders.ToArray())))
+        }
+    } else {
+        Write-Warning $script:RepairMessages.UserFoldersSnapshotUnavailable
     }
 
     $fixed = @{}
@@ -481,6 +492,9 @@ function Get-RepairVolumes {
                 }
             }
         } catch { }
+    }
+    if ($fixed.Count -eq 0) {
+        Write-Warning $script:RepairMessages.FixedDriveListUnavailable
     }
 
     $volumes = [ordered]@{}

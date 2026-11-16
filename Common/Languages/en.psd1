@@ -93,6 +93,9 @@
 
     'Check-Windows' = @{
         Title = 'Check Windows'
+        UserFoldersNotResolved = 'Could not determine the locations of these user folders: {0}. Additional local drives containing them might be omitted from the checks.'
+        UserFoldersSnapshotUnavailable = 'Could not obtain user folder information. Checks of additional local drives might be incomplete.'
+        FixedDriveListUnavailable = 'Could not enumerate local fixed drives. Checks of additional drives will be skipped.'
 
         NotChecked = 'Not checked'
         EnterYOrN = 'Enter Y or N.'
