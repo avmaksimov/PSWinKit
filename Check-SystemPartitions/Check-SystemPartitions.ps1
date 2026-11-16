@@ -563,7 +563,7 @@ function Show-CSInactiveSmallPreview($disk, $c, $parts, $source, $proposal,
     foreach ($row in $rows) {
         if ($row.Kind -eq 'RecoveryOther' -and [int]$row.PartitionNumber -eq 0) {
             $row.Number = '+'
-            $row.Role = $m.CS26NewRecovery
+            $row.Role = $m.CSNewRecovery
             $row.Recommendation = ''
         } elseif ($row.Kind -eq 'RecoveryOther' -and
             [int]$row.PartitionNumber -eq [int]$source.PartitionNumber) {
@@ -784,8 +784,8 @@ try {
     # Assess the *source image* BEFORE offering any size recommendation. At this
     # stage Windows RE is read/validated in place; no WIM is copied to staging.
     Write-Host ''
-    Write-Host ('=== ' + $m.CS26ImageTitle + ' ===') -ForegroundColor Cyan
-    Write-Host $m.CS26ImageChecking -ForegroundColor DarkGray
+    Write-Host ('=== ' + $m.CSImageTitle + ' ===') -ForegroundColor Cyan
+    Write-Host $m.CSImageChecking -ForegroundColor DarkGray
     $assessment = if ($null -ne $inactiveRecovery) {
         Get-CSInactiveRecoveryAssessment $disk $c $parts $reInfo $inactiveRecovery
     } else {
@@ -798,13 +798,13 @@ try {
     $vol = $null
     try { $vol = Get-Volume -DriveLetter C -ErrorAction Stop } catch { }
     if ($assessment.Verified) {
-        Write-Host ($m.CS26ImageSource -f $assessment.Source)
-        Write-Host ($m.CS26ImageSize -f (Format-DetailedSize $assessment.WIMBytes))
+        Write-Host ($m.CSImageSource -f $assessment.Source)
+        Write-Host ($m.CSImageSize -f (Format-DetailedSize $assessment.WIMBytes))
         if ($null -ne $assessment.FreeBytes) {
-            Write-Host ($m.CS26CurrentFree -f (Format-DetailedSize ([int64]$assessment.FreeBytes)))
+            Write-Host ($m.CSCurrentFree -f (Format-DetailedSize ([int64]$assessment.FreeBytes)))
         }
-        Write-Host ($m.CS26MinimumSize -f (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes)))
-        Write-Host $m.CS27MinimumIncludesMargin -ForegroundColor DarkGray
+        Write-Host ($m.CSMinimumSize -f (Format-DetailedSize ([int64]$assessment.MinRecoveryBytes)))
+        Write-Host $m.CSMinimumIncludesMargin -ForegroundColor DarkGray
     } else {
         if ($machineType.IsVirtual -and $null -ne $inactiveRecovery) {
             # REAgentC has already reported its failure, if attempted. State
@@ -813,7 +813,7 @@ try {
         } elseif ($machineType.IsVirtual) {
             Write-Host $m.CSVmNoVerifiedImage -ForegroundColor Yellow
         } else {
-            Write-Host ($m.CS26ImageUnavailable -f
+            Write-Host ($m.CSImageUnavailable -f
                 (([string]$assessment.Error).TrimEnd().TrimEnd('.'))) -ForegroundColor Yellow
         }
     }
@@ -852,7 +852,7 @@ try {
         } elseif ($proposal.MustRepair) {
             if ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve) {
-                $cRow[0].Recommendation = $m.CS284RecommendIncreaseRecovery
+                $cRow[0].Recommendation = $m.CSRecommendIncreaseRecovery
             } else {
                 $recoveryPartitions = @($parts | Where-Object {
                     Test-RecoveryPartition $_ ([string]$disk.PartitionStyle)
@@ -860,9 +860,9 @@ try {
                 if ($proposal.MigratingWinREOnC) {
                     $cRow[0].Recommendation = $m.CSMBRRecommendMoveWinRE
                 } elseif (-not $reInfo.Enabled -and $recoveryPartitions.Count -eq 0) {
-                    $cRow[0].Recommendation = $m.CS26RecommendationCreateMissing
+                    $cRow[0].Recommendation = $m.CSRecommendationCreateMissing
                 } else {
-                    $cRow[0].Recommendation = $m.CS26RecommendationRepair
+                    $cRow[0].Recommendation = $m.CSRecommendationRepair
                 }
             }
         }
@@ -1041,7 +1041,7 @@ try {
                 if ($smallPlan.Mode -eq 'BeforeD' -and
                     [string]$disk.PartitionStyle -eq 'GPT') {
                     Write-Host ''
-                    Write-Host ('=== ' + $m.CS28AuditTitle + ' ===') -ForegroundColor Cyan
+                    Write-Host ('=== ' + $m.CSAuditTitle + ' ===') -ForegroundColor Cyan
                     $liveDisk = Get-Disk -Number ([int]$disk.Number) -ErrorAction Stop
                     if ([string]$liveDisk.UniqueId -ne [string]$disk.UniqueId) {
                         throw $m.CSExecLayoutChanged
@@ -1131,7 +1131,7 @@ try {
     $candidateAudits = @()
     if ($candidates.Count -gt 0) {
         Write-Host ''
-        Write-Host ('=== ' + $m.CS28AuditTitle + ' ===') -ForegroundColor Cyan
+        Write-Host ('=== ' + $m.CSAuditTitle + ' ===') -ForegroundColor Cyan
         foreach ($row in $candidates) {
             $part = @($parts | Where-Object { [int]$_.PartitionNumber -eq [int]$row.PartitionNumber })
             if ($part.Count -ne 1) { throw $m.CSExecLayoutChanged }
@@ -1139,7 +1139,7 @@ try {
             $candidateAudits += $audit
             Show-CSCleanupCandidateAudit $audit
         }
-        Write-Host $m.CS28AuditDisclaimer -ForegroundColor Yellow
+        Write-Host $m.CSAuditDisclaimer -ForegroundColor Yellow
     }
     $hasChoices = ($canPreviewC -or $candidates.Count -gt 0)
     if ($hasChoices) {
@@ -1219,7 +1219,7 @@ try {
                         (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) `
                     -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y' 
             } else {
-                $optimiseC = (Read-PSWinKitChoice -Prompt $m.CS26AskRecoveryRepair `
+                $optimiseC = (Read-PSWinKitChoice -Prompt $m.CSAskRecoveryRepair `
                     -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y' 
             }
         }
@@ -1265,21 +1265,21 @@ try {
         # The active Recovery is temporary removed/recreated only as part
         # of THIS combined operation, never an independent deletion choice.
         if ($null -eq $activeRecovery) {
-            Write-Host ($m.CS26PlanCreate -f (Format-DetailedSize ([int64]$rebuildGeometry.NewSize)),
+            Write-Host ($m.CSPlanCreate -f (Format-DetailedSize ([int64]$rebuildGeometry.NewSize)),
                 (Format-DetailedSize ([int64]$proposal.MinimumRecoveryBytes)))
             if ($proposal.MigratingWinREOnC) {
                 Write-Host $m.CSMBRPlanMigration
             }
             if ($proposal.ChangeBytes -ne 0) {
-                Write-Host ($m.CS26PlanCChange -f $operation, $changeLabel)
+                Write-Host ($m.CSPlanCChange -f $operation, $changeLabel)
             }
         } else {
             if ($proposal.Beauty) {
                 Write-Host ($m.CSPlanCWithRE -f $operation, $changeLabel, $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
             } elseif ($proposal.ChangeBytes -eq 0) {
-                Write-Host ($m.CS26PlanRebuildOnly -f $activeRecovery.PartitionNumber)
+                Write-Host ($m.CSPlanRebuildOnly -f $activeRecovery.PartitionNumber)
             } else {
-                Write-Host ($m.CS26PlanTechnical -f $operation, $changeLabel, $activeRecovery.PartitionNumber)
+                Write-Host ($m.CSPlanTechnical -f $operation, $changeLabel, $activeRecovery.PartitionNumber)
             }
             Write-Host ($m.CSPlanRebuildRE -f $activeRecovery.PartitionNumber,
                 (Format-DetailedSize $rebuildGeometry.OldSize), (Format-DetailedSize $rebuildGeometry.NewSize))
@@ -1328,7 +1328,7 @@ try {
                 Write-Host ($m.CSPlanCandidateDeletion -f $n, $record[0].Role) -ForegroundColor Yellow
                 $selectedAudit = @($candidateAudits | Where-Object { [int]$_.Number -eq [int]$n })
                 if ($selectedAudit.Count -ne 1 -or -not $selectedAudit[0].Permitted) {
-                    Write-Host ('  ' + $m.CS282BlockedSimulation) -ForegroundColor Red
+                    Write-Host ('  ' + $m.CSBlockedSimulation) -ForegroundColor Red
                 }
                 $side = if ($record[0].Offset -lt [int64]$c.Offset) { $m.CSPlanLeftOfC } else {
                     $m.CSPlanNotAdjacentC
@@ -1368,7 +1368,7 @@ try {
                 if ($row.Kind -eq 'RecoveryOther' -and [int]$row.PartitionNumber -eq 0) {
                     $row.Recommendation = ''
                     $row.Number = '+'
-                    $row.Role = $m.CS26NewRecovery
+                    $row.Role = $m.CSNewRecovery
                 }
             }
         }
@@ -1396,7 +1396,7 @@ try {
     $coreSucceeded = $false
     $finalReadbackSucceeded = $false
     if ($selectedAudits.Count -ne $selected.Count -or $invalid.Count -gt 0) {
-        Write-Host $m.CS28BlockedExecutionSelection -ForegroundColor Red
+        Write-Host $m.CSBlockedExecutionSelection -ForegroundColor Red
     } else {
         if ($optimiseC) {
             if ($null -eq $activeRecovery) {
@@ -1416,7 +1416,7 @@ try {
         # No action is also reported above in the proposed plan, only once.
         if ($coreSucceeded -and $selectedAudits.Count -gt 0) {
             Write-Host ''
-            Write-Host ('=== ' + $m.CS28ExecuteTitle + ' ===') -ForegroundColor Yellow
+            Write-Host ('=== ' + $m.CSExecuteTitle + ' ===') -ForegroundColor Yellow
             Invoke-CSOptionalPartitionDeletion -disk $disk -c $c -audits $selectedAudits `
                 -BackupAlreadyConfirmed:$optimiseC
         }

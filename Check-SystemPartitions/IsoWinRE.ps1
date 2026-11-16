@@ -428,7 +428,7 @@ function Clear-CSISOStage {
     if (Test-Path -LiteralPath $script:CSISOStageDir -PathType Container) {
         try {
             if (-not (Test-CSStagingTreeSafe $script:CSISOStageDir)) {
-                throw $m.CS27CleanupUnsafeRoot
+                throw $m.CSCleanupUnsafeRoot
             }
             Remove-Item -LiteralPath $script:CSISOStageDir -Recurse -Force -ErrorAction Stop
         } catch {

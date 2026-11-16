@@ -1029,7 +1029,7 @@ function Invoke-CSExternal([string]$file, [string[]]$arguments) {
 function Invoke-CSCRecoveryExecution {
     param($Disk, $C, $Parts, $ActiveRecovery, $ReInfo, $Proposal, $RebuildGeometry, $AdditionalDeletions = @(), [switch]$PreflightOnly)
     if (-not $PreflightOnly) {
-        Write-Host $m.CS27ExecutionRisk -ForegroundColor Red
+        Write-Host $m.CSExecutionRisk -ForegroundColor Red
     }
     $script:CSExecMutated = $false
     $script:CSExecLastSucceeded = $false
@@ -1123,7 +1123,7 @@ function Invoke-CSCRecoveryExecution {
         # to risk deletion without knowing the final filesystem overhead.
         $executionFloor = [int64](250MB + 16MB)
         if ($targetFree -lt $executionFloor -or $fallbackFree -lt $executionFloor) {
-            Write-Host ($m.CS27SafetyMargin -f (Format-DetailedSize $executionFloor),
+            Write-Host ($m.CSSafetyMargin -f (Format-DetailedSize $executionFloor),
                 (Format-DetailedSize ([int64][math]::Min($targetFree,$fallbackFree)))) -ForegroundColor Yellow
             throw $m.CSExecRecoveryTooSmall
         }
@@ -2248,7 +2248,7 @@ function Invoke-CSRegisterPreparedRecovery($disk, $partitionNumber, $stagedHash,
                     $restored++
                 }
             }
-            Write-Host ($m.CS27ConfigRestored -f $restored)
+            Write-Host ($m.CSConfigRestored -f $restored)
         } else {
             $folder = Get-CSRecoveryWimFolder $root $AllowLegacyRoot
             $wim = Join-Path $folder 'Winre.wim'

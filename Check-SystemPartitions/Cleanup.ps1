@@ -27,26 +27,26 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
         Signature = ''
     }
     if ([string]$disk.PartitionStyle -ne 'GPT' -or $disk.IsOffline -or $disk.IsReadOnly) {
-        $issues.Add($m.CS28UnsafeDisk)
+        $issues.Add($m.CSUnsafeDisk)
     }
     if ($part.IsSystem -or $part.IsBoot -or $part.IsActive -or
         [int64]$part.Size -le 0 -or [int]$part.PartitionNumber -eq [int]$c.PartitionNumber) {
-        $issues.Add($m.CS28ProtectedPartition)
+        $issues.Add($m.CSProtectedPartition)
     }
     if ($null -eq $reInfo -or -not $reInfo.Enabled -or
         [int]$reInfo.DiskNumber -ne [int]$disk.Number) {
-        $issues.Add($m.CS28WinReNotEnabled)
+        $issues.Add($m.CSWinReNotEnabled)
     }
     if ($null -ne $reInfo -and $null -ne $reInfo.PartitionNumber -and
         [int]$reInfo.PartitionNumber -eq [int]$part.PartitionNumber) {
-        $issues.Add($m.CS28ProtectedPartition)
+        $issues.Add($m.CSProtectedPartition)
     }
     $root = $null
     $mounted = $false
     try {
         if ($kind -eq 'RecoveryOther') {
             if ($out.GptType -ne $script:RecoveryGuid -or $part.DriveLetter) {
-                $issues.Add($m.CS28WrongPartitionType)
+                $issues.Add($m.CSWrongPartitionType)
             } else {
                 $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$part.PartitionNumber)
                 $mounted = $true
@@ -58,34 +58,34 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                 -not $part.DriveLetter -or [int64]$part.Size -gt 128MB -or
                 [int64]$part.Offset -ge [int64]$c.Offset -or
                 ([string]$part.DriveLetter).ToUpperInvariant() -eq 'C') {
-                $issues.Add($m.CS28WrongPartitionType)
+                $issues.Add($m.CSWrongPartitionType)
             } else {
                 $letter = ([string]$part.DriveLetter).ToUpperInvariant()
                 $root = $letter + ':\'
                 if (-not [IO.Directory]::Exists($root)) {
-                    $issues.Add($m.CS28NoAccess)
+                    $issues.Add($m.CSNoAccess)
                 }
                 # A paging file or a BCD reference to this volume is disqualifying.
                 try {
                     foreach ($pg in @(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop)) {
                         if ([string]$pg.Name -match ('(?i)^' + [regex]::Escape($letter) + ':\\')) {
-                            $issues.Add($m.CS28PageFileUsed)
+                            $issues.Add($m.CSPageFileUsed)
                         }
                     }
                     foreach ($pg in @(Get-CimInstance Win32_PageFileSetting -ErrorAction Stop)) {
                         if ([string]$pg.Name -match ('(?i)^' + [regex]::Escape($letter) + ':\\')) {
-                            $issues.Add($m.CS28PageFileUsed)
+                            $issues.Add($m.CSPageFileUsed)
                         }
                     }
-                } catch { $issues.Add($m.CS28SystemUsageUnknown) }
+                } catch { $issues.Add($m.CSSystemUsageUnknown) }
                 try {
                     $bcd = (& bcdedit.exe /enum all /v 2>&1 | Out-String)
                     if ($LASTEXITCODE -ne 0) { throw 'BCD read failed.' }
                     if ($bcd -match ('(?i)(partition\s*=|ramdisk\s*=\s*\[?)' +
                         [regex]::Escape($letter) + ':')) {
-                        $issues.Add($m.CS28BootReference)
+                        $issues.Add($m.CSBootReference)
                     }
-                } catch { $issues.Add($m.CS28SystemUsageUnknown) }
+                } catch { $issues.Add($m.CSSystemUsageUnknown) }
                 # The legacy-boot exception is deliberately narrower than
                 # the generic small-data-volume candidate rule. The current
                 # Windows installation MUST boot from a DIFFERENT EFI system
@@ -95,35 +95,35 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                     if ([string]$volume.FileSystem -ne 'NTFS' -or
                         [string]$volume.FileSystemLabel -notin @('Зарезервировано системой','System Reserved') -or
                         [int64]$part.Size -ne 50MB) {
-                        $issues.Add($m.CS283LegacyVolumeNotMatch)
+                        $issues.Add($m.CSLegacyVolumeNotMatch)
                     }
                     $systemParts = @(Get-Partition -DiskNumber ([int]$disk.Number) -ErrorAction Stop |
                         Where-Object { $_.IsSystem })
                     if ($systemParts.Count -ne 1 -or
                         (Get-GptId $systemParts[0]) -ne 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B' -or
                         [int]$systemParts[0].PartitionNumber -eq [int]$part.PartitionNumber) {
-                        $issues.Add($m.CS283UefiUnverified)
+                        $issues.Add($m.CSUefiUnverified)
                     }
                     $bootManager = (& bcdedit.exe /enum '{bootmgr}' /v 2>&1 | Out-String)
                     if ($LASTEXITCODE -ne 0 -or
                         $bootManager -notmatch '(?i)\\EFI\\MICROSOFT\\BOOT\\BOOTMGFW\.EFI') {
-                        $issues.Add($m.CS283UefiUnverified)
+                        $issues.Add($m.CSUefiUnverified)
                     }
-                } catch { $issues.Add($m.CS283UefiUnverified) }
+                } catch { $issues.Add($m.CSUefiUnverified) }
             }
         } else {
-            $issues.Add($m.CS28WrongPartitionType)
+            $issues.Add($m.CSWrongPartitionType)
         }
         if ($root -and [IO.Directory]::Exists($root)) {
             $top = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
             foreach ($entry in $top) {
                 if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    $issues.Add(($m.CS28LinkDetected -f $entry.Name))
+                    $issues.Add(($m.CSLinkDetected -f $entry.Name))
                     continue
                 }
                 if ($entry.PSIsContainer -and
                     $entry.Name -in @('System Volume Information','$RECYCLE.BIN')) {
-                    $contents.Add(($m.CS28SystemDirectory -f $entry.Name))
+                    $contents.Add(($m.CSSystemDirectory -f $entry.Name))
                     continue
                 }
                 $contents.Add($entry.Name)
@@ -134,24 +134,24 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                     # link blocks deletion, even if the label matched.
                     if ($entry.PSIsContainer -or
                         $entry.Name -notin @('bootmgr','BOOTNXT','BOOTSECT.BAK')) {
-                        $issues.Add(($m.CS28ContainsData -f $entry.Name))
+                        $issues.Add(($m.CSContainsData -f $entry.Name))
                     }
                 } elseif ($entry.Name -ne 'Recovery' -or -not $entry.PSIsContainer) {
-                    $issues.Add(($m.CS28UnexpectedContent -f $entry.Name))
+                    $issues.Add(($m.CSUnexpectedContent -f $entry.Name))
                 }
             }
             if ($kind -eq 'Data' -and
                 @($top | Where-Object { -not $_.PSIsContainer -and
                     $_.Name -in @('bootmgr','BOOTNXT','BOOTSECT.BAK') }).Count -gt 0) {
-                if ($issues.Count -eq 0) { $hints.Add($m.CS283LegacyMatched) }
-                else { $hints.Add($m.CS282LegacyBootHint) }
+                if ($issues.Count -eq 0) { $hints.Add($m.CSLegacyMatched) }
+                else { $hints.Add($m.CSLegacyBootHint) }
             }
             if ($kind -eq 'RecoveryOther' -and
                 (Test-Path -LiteralPath (Join-Path $root 'Recovery') -PathType Container)) {
                 $rdir = Join-Path $root 'Recovery'
                 $rdirItem = Get-Item -LiteralPath $rdir -Force -ErrorAction Stop
                 if (($rdirItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    $issues.Add(($m.CS28LinkDetected -f 'Recovery'))
+                    $issues.Add(($m.CSLinkDetected -f 'Recovery'))
                 } else {
                 foreach ($entry in @(Get-ChildItem -LiteralPath $rdir -Force -ErrorAction Stop)) {
                     if ($entry.Name -ne 'WindowsRE' -or -not $entry.PSIsContainer -or
@@ -163,7 +163,7 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                         $recognizedLogs = ($entry.Name -eq 'Logs' -and $entry.PSIsContainer -and
                             (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0))
                         if (-not $recognizedLogs) {
-                            $issues.Add(($m.CS28UnexpectedContent -f ('Recovery\' + $entry.Name)))
+                            $issues.Add(($m.CSUnexpectedContent -f ('Recovery\' + $entry.Name)))
                         }
                         # Enumerate the Logs tree without opening reparse points.
                         if ($recognizedLogs) {
@@ -172,10 +172,10 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                                 $logContents[0].Name -ne 'Reload.xml' -or
                                 (($logContents[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
                                 [int64]$logContents[0].Length -gt 64KB) {
-                                $issues.Add(($m.CS28UnexpectedContent -f 'Recovery\Logs'))
-                                $hints.Add($m.CS282LogsHint)
+                                $issues.Add(($m.CSUnexpectedContent -f 'Recovery\Logs'))
+                                $hints.Add($m.CSLogsHint)
                             } else {
-                                $hints.Add($m.CS283LogsMatched)
+                                $hints.Add($m.CSLogsMatched)
                             }
                             $queue = New-Object 'System.Collections.Generic.Queue[object]'
                             $queue.Enqueue([pscustomobject]@{
@@ -191,11 +191,11 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                                     $relative = [string]$node.Relative + '\' + [string]$logItem.Name
                                     $contents.Add($relative)
                                     if (($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                                        $issues.Add(($m.CS28LinkDetected -f $relative))
+                                        $issues.Add(($m.CSLinkDetected -f $relative))
                                         continue
                                     }
                                     if ($logItem.PSIsContainer) {
-                                        $details.Add(($m.CS282FoundDirectory -f $relative))
+                                        $details.Add(($m.CSFoundDirectory -f $relative))
                                         if ([int]$node.Depth -lt 3) {
                                             $queue.Enqueue([pscustomobject]@{
                                                 Path = [string]$logItem.FullName
@@ -203,19 +203,19 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                                                 Depth = [int]$node.Depth + 1
                                             })
                                         } else {
-                                            $issues.Add(($m.CS282InspectionLimit -f $relative))
+                                            $issues.Add(($m.CSInspectionLimit -f $relative))
                                         }
                                     } else {
-                                        $details.Add(($m.CS282FoundFile -f $relative,
+                                        $details.Add(($m.CSFoundFile -f $relative,
                                             ([math]::Round(([double]$logItem.Length / 1KB), 1))))
                                     }
                                     if ($scanned -ge 200) { break }
                                 }
                             }
                             if ($queue.Count -gt 0 -or $scanned -ge 200) {
-                                $issues.Add(($m.CS282InspectionLimit -f 'Recovery\Logs'))
+                                $issues.Add(($m.CSInspectionLimit -f 'Recovery\Logs'))
                             }
-                            if ($scanned -eq 0) { $details.Add($m.CS282EmptyLogs) }
+                            if ($scanned -eq 0) { $details.Add($m.CSEmptyLogs) }
                         }
                     }
                 }
@@ -223,7 +223,7 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                 if (Test-Path -LiteralPath $winreFolder -PathType Container) {
                     $winreItem = Get-Item -LiteralPath $winreFolder -Force -ErrorAction Stop
                     if (($winreItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                        $issues.Add(($m.CS28LinkDetected -f 'Recovery\WindowsRE'))
+                        $issues.Add(($m.CSLinkDetected -f 'Recovery\WindowsRE'))
                     } else {
                     $approvedNames = @('Winre.wim','ReAgent.xml','boot.sdi',
                         'SrSettings.ini','WifiSettings.ini','ReCustomization.xml','ReAgent.old')
@@ -232,7 +232,7 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
                         $contents.Add($relative)
                         if ($entry.PSIsContainer -or $entry.Name -notin $approvedNames -or
                             (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
-                            $issues.Add(($m.CS28UnexpectedContent -f $relative))
+                            $issues.Add(($m.CSUnexpectedContent -f $relative))
                         }
                     }
                     }
@@ -241,11 +241,11 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
             }
         }
     } catch {
-        $issues.Add(($m.CS28InspectionError -f $_.Exception.Message))
+        $issues.Add(($m.CSInspectionError -f $_.Exception.Message))
     } finally {
         if ($mounted -or $script:CSExecMount) {
             try { Close-CSRecoveryMount ([int]$disk.Number) }
-            catch { $issues.Add(($m.CS28InspectionError -f $_.Exception.Message)) }
+            catch { $issues.Add(($m.CSInspectionError -f $_.Exception.Message)) }
         }
     }
     $out.Permitted = ($issues.Count -eq 0)
@@ -255,30 +255,30 @@ function Get-CSCleanupCandidateAudit($disk, $c, $part, [string]$kind, $reInfo) {
 }
 
 function Show-CSCleanupCandidateAudit($audit) {
-    Write-Host ($m.CS28AuditHeader -f $audit.Number, (Format-PartitionSize $audit.Size)) -ForegroundColor Cyan
+    Write-Host ($m.CSAuditHeader -f $audit.Number, (Format-PartitionSize $audit.Size)) -ForegroundColor Cyan
     if ($audit.Contents.Count -eq 0) {
-        Write-Host ('  ' + $m.CS28AppearsEmpty)
+        Write-Host ('  ' + $m.CSAppearsEmpty)
     } else {
         foreach ($item in @($audit.Contents.ToArray() | Select-Object -First 12)) {
             Write-Host ('  ' + $item)
         }
         if ($audit.Contents.Count -gt 12) {
-            Write-Host ('  ' + ($m.CS28MoreEntries -f ($audit.Contents.Count - 12)))
+            Write-Host ('  ' + ($m.CSMoreEntries -f ($audit.Contents.Count - 12)))
         }
     }
     foreach ($detail in @($audit.Details.ToArray() | Select-Object -First 30)) {
         Write-Host ('    ' + $detail) -ForegroundColor DarkGray
     }
     if ($audit.Details.Count -gt 30) {
-        Write-Host ('    ' + ($m.CS28MoreEntries -f ($audit.Details.Count - 30))) -ForegroundColor DarkGray
+        Write-Host ('    ' + ($m.CSMoreEntries -f ($audit.Details.Count - 30))) -ForegroundColor DarkGray
     }
     foreach ($hint in $audit.Hints.ToArray()) {
         Write-Host ('  ' + $hint) -ForegroundColor DarkYellow
     }
     if ($audit.Permitted) {
-        Write-Host ('  ' + $m.CS28Eligible) -ForegroundColor Yellow
+        Write-Host ('  ' + $m.CSEligible) -ForegroundColor Yellow
     } else {
-        Write-Host ('  ' + $m.CS28Blocked) -ForegroundColor Red
+        Write-Host ('  ' + $m.CSBlocked) -ForegroundColor Red
         foreach ($issue in @($audit.Issues.ToArray() | Select-Object -Unique | Select-Object -First 8)) {
             Write-Host ('  ' + $issue) -ForegroundColor Yellow
         }
@@ -307,7 +307,7 @@ function Invoke-CSOptionalDiskPart([string[]]$commands) {
 function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupAlreadyConfirmed) {
     if ($audits.Count -eq 0) { return }
     foreach ($audit in $audits) {
-        if (-not $audit.Permitted) { throw ($m.CS28BlockedExecution -f $audit.Number) }
+        if (-not $audit.Permitted) { throw ($m.CSBlockedExecution -f $audit.Number) }
     }
     if (-not $BackupAlreadyConfirmed) {
         Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
@@ -317,8 +317,8 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
             return
         }
     }
-    Write-Host $m.CS28DeletionFinalWarning -ForegroundColor Red
-    if ((Read-PSWinKitChoice -Prompt $m.CS28DeletionFinalQuestion `
+    Write-Host $m.CSDeletionFinalWarning -ForegroundColor Red
+    if ((Read-PSWinKitChoice -Prompt $m.CSDeletionFinalQuestion `
             -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $m.CSExecCancelled -ForegroundColor Yellow
         return
@@ -340,7 +340,7 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
         $liveRE = Get-WinReSnapshot
         if (-not $liveRE.Enabled -or [int]$liveRE.DiskNumber -ne [int]$audit.DiskNumber -or
             [int]$liveRE.PartitionNumber -eq [int]$candidate.PartitionNumber) {
-            throw $m.CS28WinReNotEnabled
+            throw $m.CSWinReNotEnabled
         }
         # Re-inspect after core repair and after any preceding deletion.
         $check = Get-CSCleanupCandidateAudit $freshDisk $liveC $candidate $audit.Kind $liveRE
@@ -348,17 +348,17 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
             $check.GptType -ne $audit.GptType -or
             $check.Offset -ne $audit.Offset -or $check.Size -ne $audit.Size -or
             $check.PartitionGuid -ne $audit.PartitionGuid) {
-            throw $m.CS28AuditChanged
+            throw $m.CSAuditChanged
         }
         if ((Read-PSWinKitChoice `
-                -Prompt ($m.CS28DeleteOneQuestion -f $candidate.PartitionNumber,
+                -Prompt ($m.CSDeleteOneQuestion -f $candidate.PartitionNumber,
                     (Format-PartitionSize ([int64]$candidate.Size))) `
                 -Choices @('Y', 'N') -Default 'N' `
                 -Messages $utility.CommonMessages) -eq 'N') {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
             continue
         }
-        Write-Host ($m.CS28Deleting -f $candidate.PartitionNumber) -ForegroundColor Yellow
+        Write-Host ($m.CSDeleting -f $candidate.PartitionNumber) -ForegroundColor Yellow
         if ($audit.Kind -eq 'Data') {
             # No force/override on basic data volumes.
             Remove-Partition -DiskNumber ([int]$audit.DiskNumber) -PartitionNumber ([int]$candidate.PartitionNumber) `
@@ -366,14 +366,14 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
         } elseif ($audit.Kind -eq 'RecoveryOther') {
             Invoke-CSOptionalDiskPart @("select disk $($audit.DiskNumber)",
                 "select partition $($candidate.PartitionNumber)",'delete partition override')
-        } else { throw $m.CS28WrongPartitionType }
+        } else { throw $m.CSWrongPartitionType }
         $remaining = @(Get-Partition -DiskNumber ([int]$audit.DiskNumber) -ErrorAction Stop |
             Where-Object { [int64]$_.Offset -eq [int64]$audit.Offset })
-        if ($remaining.Count -gt 0) { throw $m.CS28DeletionFailed }
+        if ($remaining.Count -gt 0) { throw $m.CSDeletionFailed }
         $afterRE = Get-WinReSnapshot
         if (-not $afterRE.Enabled -or [int]$afterRE.DiskNumber -ne [int]$audit.DiskNumber) {
-            throw $m.CS28WinReNotEnabled
+            throw $m.CSWinReNotEnabled
         }
-        Write-Host ($m.CS28Deleted -f $candidate.PartitionNumber) -ForegroundColor Green
+        Write-Host ($m.CSDeleted -f $candidate.PartitionNumber) -ForegroundColor Green
     }
 }

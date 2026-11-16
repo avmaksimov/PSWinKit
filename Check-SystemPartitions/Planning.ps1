@@ -43,8 +43,8 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery,
                     $path = $candidatePath
                     $out.Existing = $candidate
                     $out.Source = if ($null -ne $activeRecovery) {
-                        ($m.CS26SourceRegistered -f $candidate.PartitionNumber)
-                    } else { ($m.CS26SourceUnregistered -f $candidate.PartitionNumber) }
+                        ($m.CSSourceRegistered -f $candidate.PartitionNumber)
+                    } else { ($m.CSSourceUnregistered -f $candidate.PartitionNumber) }
                     try {
                         $volume = Get-Volume -Partition $candidate -ErrorAction Stop
                         if ($null -ne $volume -and [int64]$volume.Size -gt 0 -and
@@ -102,7 +102,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery,
             $local = Find-CSLocalWinREImage
             if ($null -ne $local) {
                 $path = $local
-                $out.Source = $m.CS26SourceLocal
+                $out.Source = $m.CSSourceLocal
                 # An image on C: is not evidence of an image on Recovery.
                 $out.Existing = $null
                 $out.UsedBytes = $null
@@ -120,7 +120,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery,
             if ($path) { $out.Source = $m.CSIsoImageSource }
         }
         if ($null -eq $path) {
-            $out.Error = $m.CS26ImageMissing
+            $out.Error = $m.CSImageMissing
             return [pscustomobject]$out
         }
         # Validate the WIM header / image with Windows DISM, without copying it.
@@ -153,7 +153,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery,
             catch {
                 # A mount that cannot be detached is a hard error, not a
                 # cosmetic diagnostic problem.
-                throw ($m.CS26MountCleanupFailed -f $_.Exception.Message)
+                throw ($m.CSMountCleanupFailed -f $_.Exception.Message)
             }
         }
     }
