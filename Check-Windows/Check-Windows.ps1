@@ -492,7 +492,9 @@ function Get-RepairVolumes {
         # The original user's environment variables were expanded BEFORE UAC.
         $path = [string]$candidate.Path
         if ($path -notmatch '^[A-Za-z]:\\') { continue }
-        if (-not $candidate.Prechecked -and
+        # Only snapshot entries carry Prechecked; ordinary folder candidates do not.
+        $prechecked = $candidate.ContainsKey('Prechecked') -and [bool]$candidate['Prechecked']
+        if (-not $prechecked -and
             -not (Test-Path -LiteralPath $path -PathType Container -ErrorAction SilentlyContinue)) { continue }
         $drive = $path.Substring(0, 2).ToUpperInvariant()
         if (-not $fixed.ContainsKey($drive)) { continue }
