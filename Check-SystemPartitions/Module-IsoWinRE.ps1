@@ -364,7 +364,7 @@ function Get-CSISOImage {
         Write-Host $m.CSIsoTrying7Zip -ForegroundColor DarkGray
         try {
             & $zip 'e' $source $entry ("-o$wimDirectory") '-y' | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', $LASTEXITCODE) }
+            if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', (Format-CSExitCode $LASTEXITCODE)) }
             Assert-CSWim $destination
         } catch {
             Write-Host ($m.CSIso7ZipFallback -f $_.Exception.Message) -ForegroundColor Yellow

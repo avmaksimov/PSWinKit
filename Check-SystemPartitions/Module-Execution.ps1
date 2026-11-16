@@ -184,7 +184,8 @@ function Assert-CSBitLockerOff {
             -ErrorAction Stop
         if ([uint32]$conversion.ReturnValue -ne 0 -or
             [uint32]$protection.ReturnValue -ne 0) {
-            throw ($m.CSBitLockerWmiMethodsFailed -f $conversion.ReturnValue, $protection.ReturnValue)
+            throw ($m.CSBitLockerWmiMethodsFailed -f (Format-CSExitCode $conversion.ReturnValue),
+                (Format-CSExitCode $protection.ReturnValue))
         }
         # 0/0 is the only acceptable state: fully decrypted, protection off.
         # Protection off alone is not proof that the volume is decrypted.
@@ -812,10 +813,10 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
                 Write-Host $m.CSFsChkdskClean -ForegroundColor Green
             } else {
                 $detail = (@($fallbackOutput | Select-Object -Last 4) -join ' ').Trim()
-                Write-Host ($m.CSFsChkdskFailed -f $fallbackCode, $detail) -ForegroundColor Yellow
+                Write-Host ($m.CSFsChkdskFailed -f (Format-CSExitCode $fallbackCode), $detail) -ForegroundColor Yellow
             }
         } catch {
-            Write-Host ($m.CSFsChkdskFailed -f 'exception', $_.Exception.Message) -ForegroundColor Yellow
+            Write-Host ($m.CSFsChkdskException -f $_.Exception.Message) -ForegroundColor Yellow
         }
     }
 
@@ -1023,7 +1024,7 @@ function Set-CSRecoveryType($disk, $partNumber) {
 
 function Invoke-CSExternal([string]$file, [string[]]$arguments) {
     & $file @arguments
-    if ($LASTEXITCODE -ne 0) { throw ($m.CSExecExternalFailed -f $file, $LASTEXITCODE) }
+    if ($LASTEXITCODE -ne 0) { throw ($m.CSExecExternalFailed -f $file, (Format-CSExitCode $LASTEXITCODE)) }
 }
 
 function Invoke-CSCRecoveryExecution {

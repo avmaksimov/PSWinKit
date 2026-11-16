@@ -93,6 +93,11 @@ function Format-FreeSpaceSize([int64]$bytes) {
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
+# Native Windows exit codes are 32-bit values. Display their hexadecimal
+# representation without an unnecessary signed/decimal duplicate.
+function Format-CSExitCode([long]$code) {
+    return ('0x{0:X8}' -f ($code -band [long]4294967295))
+}
 function Format-DetailedSize([int64]$bytes) {
     if ($bytes -ge $script:GiB) {
         return ($m.CSSizeGiB -f ([math]::Round($bytes / [double]$script:GiB, 2)))
@@ -762,7 +767,7 @@ try {
             }
             if ($enableError) {
                 if ($null -ne $enableExitCode) {
-                    Write-Host ($m.CSReEnableExitCode -f $enableExitCode) -ForegroundColor Yellow
+                    Write-Host ($m.CSReEnableExitCode -f (Format-CSExitCode $enableExitCode)) -ForegroundColor Yellow
                 } else {
                     Write-Host ($m.CSReEnableFailed -f $enableError) -ForegroundColor Yellow
                 }
