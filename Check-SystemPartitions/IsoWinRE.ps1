@@ -127,31 +127,10 @@ function Get-CSSevenZipPath {
     return $null
 }
 
-# Common catalog is shared by Check-SystemPartitions and future Check-Windows.
-# No local machine-specific cache is created.
+# Installation source discovery and ISO catalog are shared with Check-Windows.
+# Call shared functions directly: no CS-specific forwarding wrappers.
 . (Join-Path $PSScriptRoot '..\Common\ImageCatalog.ps1')
 . (Join-Path $PSScriptRoot '..\Common\InstallationSources.ps1')
-
-function Get-CSInstallationSourceAtRoot([string]$root) {
-    return (Get-PSWinKitInstallationImageAtRoot $root)
-}
-
-function Get-CSInstallationSource([string]$letter) {
-    return (Get-CSInstallationSourceAtRoot ($letter.ToUpperInvariant() + ':\'))
-}
-
-function Get-CSSplitWimPattern([string]$source) {
-    # Shared SWM validation is reused by both diagnostic utilities.
-    return (Get-PSWinKitSplitWimPattern $source)
-}
-
-function Get-CSMountedISOOrigin([string]$letter) {
-    return (Get-PSWinKitMountedISOOrigin $letter)
-}
-
-function Mount-CSInstallationISO([string]$path) {
-    return (Mount-PSWinKitInstallationISO -Path $path -MountMessage $m.CSIsoMountingFile)
-}
 
 function Get-CSCatalogMatchingISOs {
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
@@ -229,7 +208,7 @@ function Find-CSInstallationSourcesInFolder([string]$folder) {
         try {
             $di = [IO.DirectoryInfo]::new($directory)
             if (($di.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
-            $source = Get-CSInstallationSourceAtRoot $directory
+            $source = Get-PSWinKitInstallationImageAtRoot $directory
             if ($source) {
                 $found.Add([pscustomobject]@{ Source=$source; ISOPath='' })
             }
@@ -257,18 +236,18 @@ function Resolve-CSUserInstallationSource([string]$inputText) {
         if ([IO.Path]::GetExtension($resolved) -ine '.iso') {
             throw ($m.CSIsoInvalidPath -f $inputText)
         }
-        return (Mount-CSInstallationISO $resolved)
+        return (Mount-PSWinKitInstallationISO -Path $resolved -Messages $utility.CommonMessages)
     }
     if (-not [IO.Directory]::Exists($resolved)) { throw ($m.CSIsoInvalidPath -f $inputText) }
     $sources = @(Find-CSInstallationSourcesInFolder $resolved)
     if ($sources.Count -eq 0) { throw ($m.CSIsoNoFilesInFolder -f $resolved) }
     $picked = Select-CSCatalogOrFoundSource $sources $m.CSIsoFoundSources
     if ($null -eq $picked) { return $null }
-    if ($picked.ISOPath) { return (Mount-CSInstallationISO $picked.ISOPath) }
+    if ($picked.ISOPath) { return (Mount-PSWinKitInstallationISO -Path $picked.ISOPath -Messages $utility.CommonMessages) }
     # If a user entered F / F: for a mounted ISO, remember the original ISO
     # path rather than the temporary drive letter. Physical DVDs stay transient.
-    if ([string]$picked.Source -match '^([A-Za-z]):\') {
-        $picked.ISOPath = Get-CSMountedISOOrigin $matches[1]
+    if ([string]$picked.Source -match '^([A-Za-z]):\\') {
+        $picked.ISOPath = Get-PSWinKitMountedISOOrigin $matches[1]
     }
     return $picked
 }
@@ -282,7 +261,7 @@ function Get-CSSelectedInstallationSource {
         $chosen = Select-CSCatalogOrFoundSource $known $m.CSIsoKnownSources
         if ($null -eq $chosen) { return $null }
         try {
-            $mountedSource = Mount-CSInstallationISO $chosen.Path
+            $mountedSource = Mount-PSWinKitInstallationISO -Path $chosen.Path -Messages $utility.CommonMessages
             # Cache data is only a hint; validate the actual installation media.
             $mountedIndex = Select-CSISOImageIndex $mountedSource.Source
             $mountedSource | Add-Member -NotePropertyName VerifiedIndex -NotePropertyValue $mountedIndex
@@ -299,7 +278,7 @@ function Get-CSSelectedInstallationSource {
             $mountedIndex = Select-CSISOImageIndex ([string]$selected.Source)
             return [pscustomobject]@{
                 Source = [string]$selected.Source
-                ISOPath = (Get-CSMountedISOOrigin ([string]$selected.Letter))
+                ISOPath = (Get-PSWinKitMountedISOOrigin ([string]$selected.Letter))
                 VerifiedIndex = [int]$mountedIndex
             }
         } catch { Write-Warning ($m.CSIsoMountedMismatch -f $_.Exception.Message) }
@@ -319,10 +298,10 @@ function Get-CSMountedInstallationImages {
     foreach ($drive in $drives) {
         $letter = ([string]$drive.Drive).Trim().TrimEnd(':').ToUpperInvariant()
         if ($letter -notmatch '^[A-Z]$') { continue }
-        $source = Get-CSInstallationSource $letter
+        $source = Get-PSWinKitInstallationImageAtRoot ($letter.ToUpperInvariant() + ':\')
         if (-not $source) { continue }
         $label = ''
-        $origin = Get-CSMountedISOOrigin $letter
+        $origin = Get-PSWinKitMountedISOOrigin $letter
         if ($origin) { $label = [IO.Path]::GetFileName($origin) }
         if (-not $label) {
             try { $label = [string](Get-Volume -DriveLetter ([char]$letter) -ErrorAction Stop).FileSystemLabel }
@@ -378,7 +357,7 @@ function Get-CSISOImage {
 
     $extension = [IO.Path]::GetExtension($source).ToLowerInvariant()
     $swmPattern = $null
-    if ($extension -eq '.swm') { $swmPattern = Get-CSSplitWimPattern $source }
+    if ($extension -eq '.swm') { $swmPattern = Get-PSWinKitSplitWimPattern -Source $source -Messages $utility.CommonMessages }
     $zip = Get-CSSevenZipPath
     if ($zip -and $extension -ne '.swm') {
         $entry = ('{0}\Windows\System32\Recovery\Winre.wim' -f $index)

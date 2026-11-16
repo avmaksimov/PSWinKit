@@ -111,9 +111,9 @@ function Show-CSExistingStages {
     )
     $folderWidth = [math]::Max(38, [int]$m.CSStageColumnFolder.Length)
     $dateWidth = [math]::Max(19, [int]$m.CSStageColumnCreated.Length)
-    $sizeWidth = [math]::Max(10, [int]$m.CSStageColumnSize.Length)
+    $sizeWidth = [math]::Max(10, [int]$m.CSColSize.Length)
     $format = '{0,-' + $folderWidth + '}  {1,-' + $dateWidth + '}  {2,' + $sizeWidth + '}'
-    Write-Host ($format -f $m.CSStageColumnFolder, $m.CSStageColumnCreated, $m.CSStageColumnSize)
+    Write-Host ($format -f $m.CSStageColumnFolder, $m.CSStageColumnCreated, $m.CSColSize)
     Write-Host ($format -f ('-' * $folderWidth), ('-' * $dateWidth), ('-' * $sizeWidth))
     foreach ($entry in $entries) {
         Write-Host ($format -f $entry.Folder, $entry.Created, $entry.Size)

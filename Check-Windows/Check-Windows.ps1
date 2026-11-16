@@ -71,7 +71,7 @@ function Find-ImageAtPath {
     $item = Get-Item -LiteralPath $value -ErrorAction Stop
     if (-not $item.PSIsContainer) {
         if ($item.Extension -ieq '.iso') {
-            $selected = Mount-PSWinKitInstallationISO $item.FullName
+            $selected = Mount-PSWinKitInstallationISO -Path $item.FullName -Messages $utility.CommonMessages
             $script:RepairISOOrigin = [string]$selected.ISOPath
             return [string]$selected.Source
         }
@@ -701,11 +701,11 @@ function Offer-InPlaceWindowsSetup {
     Write-Host ($script:RepairMessages.InstalledWindowsArchitecture -f $OsProfile.Architecture)
     Write-Host ($script:RepairMessages.InstalledWindowsLanguage -f $OsProfile.Language)
     Write-Host ($script:RepairMessages.ISOImageIndex0 -f $index) -ForegroundColor Cyan
-    Write-Host ($script:RepairMessages.IsoImageName -f $details.Name)
-    Write-Host ($script:RepairMessages.IsoImageEdition -f $details.Edition)
-    Write-Host ($script:RepairMessages.IsoImageVersion -f $targetVersion)
-    Write-Host ($script:RepairMessages.IsoImageArchitecture -f $details.Architecture)
-    Write-Host ($script:RepairMessages.IsoImageLanguage -f $details.Language)
+    Write-Host ($script:RepairMessages.InstalledWindowsName -f $details.Name)
+    Write-Host ($script:RepairMessages.InstalledWindowsEdition -f $details.Edition)
+    Write-Host ($script:RepairMessages.InstalledWindowsVersion -f $targetVersion)
+    Write-Host ($script:RepairMessages.InstalledWindowsArchitecture -f $details.Architecture)
+    Write-Host ($script:RepairMessages.InstalledWindowsLanguage -f $details.Language)
     Write-Host ($script:RepairMessages.Installer0 -f $setup)
     Write-Host $script:RepairMessages.EditionArchitectureAndLanguage -ForegroundColor Green
     Write-Host $script:RepairMessages.CarefullyReviewBothEditions -ForegroundColor Yellow
@@ -894,7 +894,7 @@ try {
     Write-Host ($script:RepairMessages.DISMLog + (Join-Path $env:SystemRoot 'Logs\DISM\dism.log'))
     Write-Host ($script:RepairMessages.CBSLog + (Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'))
     if ($script:LogPath -ne $null -and $script:TranscriptOn) {
-        Write-Host ($script:RepairMessages.RepairWindowsLogSummary + $script:LogPath)
+        Write-Host ($script:RepairMessages.RepairWindowsLogStarted + $script:LogPath)
     }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
         Write-Host $script:RepairMessages.DISMDidNotRepair -ForegroundColor Yellow

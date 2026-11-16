@@ -54,7 +54,7 @@ function Get-RepairImageFromCatalog {
     }
     $path = [string]$saved[$idx - 1].path
     try {
-        $selected = Mount-PSWinKitInstallationISO $path
+        $selected = Mount-PSWinKitInstallationISO -Path $path -Messages $utility.CommonMessages
         $script:RepairISOOrigin = [string]$selected.ISOPath
         Write-Host ($script:RepairMessages.ISOHistoryUsing -f $path) -ForegroundColor Green
         return [string]$selected.Source
@@ -104,7 +104,7 @@ function Save-RepairISOHistory {
 
 function Invoke-RepairFromSplitWim {
     param([string]$ImagePath, [int]$ImageIndex, $OriginalDetails)
-    $pattern = Get-PSWinKitSplitWimPattern $ImagePath
+    $pattern = Get-PSWinKitSplitWimPattern -Source $ImagePath -Messages $utility.CommonMessages
     $disk = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($env:ProgramData))
     if ([int64]$disk.AvailableFreeSpace -lt 9GB) {
         Write-Host $script:RepairMessages.SWMNoSpace -ForegroundColor Yellow

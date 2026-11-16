@@ -14,11 +14,14 @@ function Get-PSWinKitInstallationImageAtRoot {
 }
 
 function Get-PSWinKitSplitWimPattern {
-    param([Parameter(Mandatory=$true)][string]$Source)
+    param(
+        [Parameter(Mandatory=$true)][string]$Source,
+        [Parameter(Mandatory=$true)][hashtable]$Messages
+    )
 
     $sourceFile = Get-Item -LiteralPath $Source -Force -ErrorAction Stop
     if ($sourceFile.PSIsContainer -or $sourceFile.Name -ine 'install.swm') {
-        throw ('Expected first SWM part: install.swm; received: ' + $Source)
+        throw ($Messages.InstallSourceFirstSWM -f $Source)
     }
     $folder = $sourceFile.DirectoryName
     $allParts = @(Get-ChildItem -LiteralPath $folder -Filter 'install*.swm' -File -ErrorAction Stop)
@@ -30,19 +33,19 @@ function Get-PSWinKitSplitWimPattern {
         } elseif ($part.Name -match '(?i)^install([2-9]|[1-9][0-9]+)\.swm$') {
             $number = [int]$Matches[1]
         } else {
-            throw ('Unexpected split-image part: ' + $part.FullName)
+            throw ($Messages.InstallSourceUnexpectedSWM -f $part.FullName)
         }
         if (-not $numbered.Add($number)) {
-            throw ('Duplicate split-image part number: ' + $number)
+            throw ($Messages.InstallSourceDuplicateSWM -f $number)
         }
     }
     if ($numbered.Count -eq 0 -or -not $numbered.Contains(1)) {
-        throw ('Missing install.swm in ' + $folder)
+        throw ($Messages.InstallSourceFirstSWM -f $Source)
     }
     $max = [int](($numbered | Measure-Object -Maximum).Maximum)
     for ($i=1; $i -le $max; $i++) {
         if (-not $numbered.Contains($i)) {
-            throw ('Missing split-image part: install{0}.swm' -f $i)
+            throw ($Messages.InstallSourceMissingSWM -f ('install{0}.swm' -f $i))
         }
     }
     return (Join-Path $folder 'install*.swm')
@@ -72,15 +75,18 @@ function Get-PSWinKitMountedISOOrigin {
 }
 
 function Mount-PSWinKitInstallationISO {
-    param([Parameter(Mandatory=$true)][string]$Path, [string]$MountMessage = '')
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][hashtable]$Messages
+    )
 
     $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).ProviderPath
     if ([IO.Path]::GetExtension($resolved) -ine '.iso' -or -not [IO.File]::Exists($resolved)) {
-        throw ('ISO file not found: ' + $Path)
+        throw ($Messages.InstallSourceISOUnavailable -f $Path)
     }
     $image = Get-DiskImage -ImagePath $resolved -ErrorAction Stop
     if (-not $image.Attached) {
-        if ($MountMessage) { Write-Host ($MountMessage -f $resolved) -ForegroundColor Gray }
+        Write-Host ($Messages.InstallSourceMountingISO -f $resolved) -ForegroundColor Gray
         $image = Mount-DiskImage -ImagePath $resolved -PassThru -ErrorAction Stop
     }
     $sources = @()
@@ -91,7 +97,7 @@ function Mount-PSWinKitInstallationISO {
         if ($source) { $sources += $source }
     }
     if ($sources.Count -ne 1) {
-        throw ('Expected one Windows installation image in ISO: ' + $resolved)
+        throw ($Messages.InstallSourceISOImageCount -f $resolved)
     }
     return [pscustomobject]@{ Source = [string]$sources[0]; ISOPath = $resolved }
 }
