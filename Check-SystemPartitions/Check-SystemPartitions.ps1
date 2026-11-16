@@ -585,7 +585,8 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
     foreach ($part in $sorted) { $edge = [math]::Max($edge, (Get-PartitionEnd $part)) }
     return [pscustomobject]@{ Start = [int64]$sorted[0].Offset; End = [int64]$edge }
 }
-function Read-YesNo([string]$prompt) {
+function Read-YesNo([string]$prompt, [switch]$DefaultYes, [switch]$DefaultNo) {
+    if ($DefaultYes -and $DefaultNo) { throw 'Only one default may be specified.' }
     # Visually separate the final destructive confirmation from the backup
     # acknowledgement and other preflight output, in every language.
     if ($prompt -eq $m.CSExecFinalConfirm -or $prompt -eq $m.CSNewFinalConfirm -or
@@ -593,10 +594,25 @@ function Read-YesNo([string]$prompt) {
         Write-Host ''
     }
     while ($true) {
-        $answer = (Read-Host ($prompt + ' ' + $m.CSYesNo)).Trim().ToUpperInvariant()
+        $suffix = if ($DefaultYes) { $m.CSYesNoDefaultYes } elseif ($DefaultNo) {
+            $m.CSYesNoDefaultNo
+        } else { $m.CSYesNo }
+        $answer = (Read-Host ($prompt + ' ' + $suffix)).Trim().ToUpperInvariant()
         if ($answer -eq 'Y') { return $true }
         if ($answer -eq 'N') { return $false }
+        if ($answer -eq '' -and $DefaultYes) { return $true }
+        if ($answer -eq '' -and $DefaultNo) { return $false }
         Write-Host $m.CSInvalidYesNo -ForegroundColor Yellow
+    }
+}
+
+function Read-CSRepairRoundingChoice([int64]$TargetExplorerGiB) {
+    while ($true) {
+        $prompt = $m.CSAskRepairWithOptionalRounding -f $TargetExplorerGiB
+        $answer = (Read-Host $prompt).Trim().ToUpperInvariant()
+        if ($answer -eq '') { return 'Y' }
+        if ($answer -in @('Y', 'R', 'N')) { return $answer }
+        Write-Host $m.CSInvalidRepairRoundingChoice -ForegroundColor Yellow
     }
 }
 
@@ -1165,9 +1181,27 @@ try {
                         }
                     }
                 }
+            } elseif ($proposal.Beauty -and $proposal.MustRepair) {
+                # Repair is mandatory for a healthy WinRE plan; cosmetic sizing
+                # is optional. R requests a fresh technical-only geometry.
+                $choice = Read-CSRepairRoundingChoice ([int64]$proposal.TargetExplorerGiB)
+                if ($choice -eq 'R') {
+                    $technicalPlan = Get-CSPlanningDecision $disk $c $parts $reInfo `
+                        $activeRecovery $assessment $vol $usableBounds `
+                        -IncludeCosmeticRounding:$false
+                    if ($null -eq $technicalPlan -or -not $technicalPlan.MustRepair -or
+                        $null -eq $technicalPlan.Geometry -or
+                        -not $technicalPlan.Geometry.IsGeometryPossible -or
+                        $technicalPlan.Beauty) {
+                        throw $m.CSTechnicalPlanUnavailable
+                    }
+                    $proposal = $technicalPlan
+                    $geometryCandidate = $technicalPlan.Geometry
+                }
+                $optimiseC = ($choice -ne 'N')
             } elseif ($proposal.Beauty) {
                 $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f
-                    $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber)
+                    $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber) -DefaultYes
             } elseif ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
                 [int64]$proposal.ChangeBytes -lt 0) {
@@ -1190,7 +1224,7 @@ try {
                 Write-Host ($m.CSSelectionBlocked -f $candidate.PartitionNumber) -ForegroundColor Yellow
                 continue
             }
-            if (Read-YesNo ($m.CSAskDeletePartition -f $candidate.PartitionNumber, ($details -join ', '))) {
+            if (Read-YesNo ($m.CSAskDeletePartition -f $candidate.PartitionNumber, ($details -join ', ')) -DefaultNo) {
                 $selected.Add([int]$candidate.PartitionNumber)
             }
         }

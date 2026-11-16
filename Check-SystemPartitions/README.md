@@ -21,6 +21,9 @@
 
 The target is based on the actual NTFS volume capacity, not just partition geometry. Windows partition alignment and filesystem overhead are also considered, so the partition's raw size may differ slightly from the round value shown by File Explorer.
 
+
+**C: rounding choice:** when WinRE repair is required and cosmetic rounding is also possible, a single `Y/R/N` prompt defaults to `Y`: `Y` repairs with rounding, `R` repairs without cosmetic rounding, and `N` declines the repair. `R` recalculates the technical-only partition geometry. If WinRE is healthy and only rounding is offered, the `Y/N` prompt defaults to `Y`. Optional obsolete-partition deletion remains a separately audited `Y/N` choice, default `N`.
+
 ## Run
 
 From the PSWinKit root in Windows PowerShell 5.1:

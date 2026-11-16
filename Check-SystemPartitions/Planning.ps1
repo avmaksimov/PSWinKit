@@ -201,7 +201,7 @@ function Get-CSProposedGeometry($disk, $c, $parts, $activeRecovery, [int64]$newC
 }
 
 function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
-    $assessment, $volume, $bounds) {
+    $assessment, $volume, $bounds, [bool]$IncludeCosmeticRounding = $true) {
     if ($null -eq $activeRecovery -and $null -ne $assessment.Existing) {
         # An unregistered partition must not be overwritten or duplicated.
         return $null
@@ -280,26 +280,28 @@ function Get-CSPlanningDecision($disk, $c, $parts, $reInfo, $activeRecovery,
     $step = [double]$script:CSBeautyStep
     $lower = [int64]([math]::Floor($fsBytes / $step) * 10)
     $upper = [int64]($lower + 10)
-    foreach ($number in @($lower, $upper)) {
-        # Cosmetic resizes are not part of creating a missing Recovery.
-        if ($null -eq $activeRecovery -or $number -le 0) { continue }
-        $goalFS = [int64]($number * $script:GiB)
-        $desiredEnd = Align-UpMiB ([int64]($c.Offset + $goalFS + $fsDelta))
-        $size = [int64]($desiredEnd - [int64]$c.Offset)
-        # Don't propose a cosmetic rebuild for an already-beautiful capacity.
-        if (-not $mustRepair -and
-            [int64][math]::Floor($fsBytes / [double]$script:GiB) -eq $number) { continue }
-        if ([math]::Abs([double]($size - $baseC)) -gt $script:CSCosmeticLimit) { continue }
-        $candidateGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $size $bounds $maxNewSize
-        if ($null -eq $candidateGeo -or [int64]$candidateGeo.NewSize -lt $minRecovery) { continue }
-        # Avoid changing a system volume for beauty if the target filesystem
-        # is only nominally smaller but Windows can't fit its actual metadata.
-        if ($size -le 0) { continue }
-        if (-not $beauty -or
-            [math]::Abs([double]($size - $baseC)) -lt [math]::Abs([double]($chosenC - $baseC))) {
-            $chosenC = $size
-            $beautyGiB = $number
-            $beauty = $true
+    if ($IncludeCosmeticRounding) {
+        foreach ($number in @($lower, $upper)) {
+            # Cosmetic resizes are not part of creating a missing Recovery.
+            if ($null -eq $activeRecovery -or $number -le 0) { continue }
+            $goalFS = [int64]($number * $script:GiB)
+            $desiredEnd = Align-UpMiB ([int64]($c.Offset + $goalFS + $fsDelta))
+            $size = [int64]($desiredEnd - [int64]$c.Offset)
+            # Don't propose a cosmetic rebuild for an already-beautiful capacity.
+            if (-not $mustRepair -and
+                [int64][math]::Floor($fsBytes / [double]$script:GiB) -eq $number) { continue }
+            if ([math]::Abs([double]($size - $baseC)) -gt $script:CSCosmeticLimit) { continue }
+            $candidateGeo = Get-CSProposedGeometry $disk $c $parts $activeRecovery $size $bounds $maxNewSize
+            if ($null -eq $candidateGeo -or [int64]$candidateGeo.NewSize -lt $minRecovery) { continue }
+            # Avoid changing a system volume for beauty if the target filesystem
+            # is only nominally smaller but Windows can't fit its actual metadata.
+            if ($size -le 0) { continue }
+            if (-not $beauty -or
+                [math]::Abs([double]($size - $baseC)) -lt [math]::Abs([double]($chosenC - $baseC))) {
+                $chosenC = $size
+                $beautyGiB = $number
+                $beauty = $true
+            }
         }
     }
     if (-not $mustRepair -and -not $beauty) { return $null }
