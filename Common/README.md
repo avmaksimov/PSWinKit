@@ -28,6 +28,12 @@ PSWinKit/
 ├── Common/
 │   ├── Common.ps1
 │   ├── Questions.ps1
+│   ├── ImageCatalog.ps1
+│   ├── InstallationSources.ps1
+│   ├── Data/  # created automatically; not tracked by Git
+│   │   ├── images.json
+│   │   ├── images_<GUID>.json
+│   │   └── images.lock
 │   ├── README.md
 │   ├── README.ru.md
 │   └── Languages/
@@ -50,6 +56,8 @@ PSWinKit/
     ├── README.md
     └── README.ru.md
 ```
+
+`Common/Data` is the shared **runtime** directory for the Windows ISO catalog (`images.json`, `images_<GUID>.json`, `images.lock`). It is created as necessary and must be preserved on update; generated content is ignored by Git. Existing installations must move catalog files from the former root `Data` directory into `Common/Data` with all utilities stopped (including SMB clients). Never overwrite a conflicting catalog or delete the original before verifying the new location.
 
 Future utilities have their own folders, but all translations are held centrally in Common/Languages. The shared library is dot-sourced relative to the utility's `$PSScriptRoot`:
 

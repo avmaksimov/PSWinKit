@@ -1,12 +1,12 @@
 ﻿#Requires -Version 5.1
 # Common Windows installation ISO index. Dot-source from a utility; no work on import.
-# All participating Windows/SMB clients use the same PSWinKit\Data directory.
+# All participating Windows/SMB clients use the same PSWinKit\Common\Data directory.
 # Cache is advisory: neither failure to save nor failure to merge blocks a repair.
 
 Set-StrictMode -Version 2.0
 
 # Capture the module location on import; do not depend on the caller's working dir.
-$script:PSWinKitImageCatalogDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\Data'))
+$script:PSWinKitImageCatalogDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Data'))
 
 function Get-PSWinKitImageCatalogDirectory {
     return $script:PSWinKitImageCatalogDirectory
