@@ -18,15 +18,15 @@ $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator `
     -LanguageFile $LanguageFile
 if ($null -eq $utility) { return }
 $m = $utility.Messages
-# Execution.ps1 — execution preflight, disk and WinRE changes, staging safety.
-# IsoWinRE.ps1 — ISO discovery, image selection and Winre.wim extraction.
-# Planning.ps1 — read-only WinRE assessment and partition geometry decisions.
-# Cleanup.ps1 — audit and optional deletion of obsolete partitions.
+# Module-Execution.ps1 — execution preflight, disk and WinRE changes, staging safety.
+# Module-IsoWinRE.ps1 — ISO discovery, image selection and Winre.wim extraction.
+# Module-Planning.ps1 — read-only WinRE assessment and partition geometry decisions.
+# Module-Cleanup.ps1 — audit and optional deletion of obsolete partitions.
 # Common/Common.ps1 — launch, elevation, localization and exit handling.
-. (Join-Path $PSScriptRoot 'Execution.ps1')
-. (Join-Path $PSScriptRoot 'IsoWinRE.ps1')
-. (Join-Path $PSScriptRoot 'Planning.ps1')
-. (Join-Path $PSScriptRoot 'Cleanup.ps1')
+. (Join-Path $PSScriptRoot 'Module-Execution.ps1')
+. (Join-Path $PSScriptRoot 'Module-IsoWinRE.ps1')
+. (Join-Path $PSScriptRoot 'Module-Planning.ps1')
+. (Join-Path $PSScriptRoot 'Module-Cleanup.ps1')
 
 
 $script:MiB = [int64]1048576

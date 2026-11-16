@@ -45,17 +45,20 @@ PSWinKit/
 │   └── README.ru.md
 ├── Check-Windows/
 │   ├── Check-Windows.ps1
+│   ├── Module-ISORepair.ps1
 │   ├── README.md
 │   └── README.ru.md
 └── Check-SystemPartitions/
     ├── Check-SystemPartitions.ps1
-    ├── Planning.ps1
-    ├── Execution.ps1
-    ├── Cleanup.ps1
-    ├── IsoWinRE.ps1
+    ├── Module-Planning.ps1
+    ├── Module-Execution.ps1
+    ├── Module-Cleanup.ps1
+    ├── Module-IsoWinRE.ps1
     ├── README.md
     └── README.ru.md
 ```
+
+Точка входа каждой утилиты — одноимённый основной скрипт. `Module-*.ps1` — внутренние вспомогательные модули, их не запускают напрямую.
 
 `Common/Data` — общая папка **рабочих данных** каталога установочных ISO (`images.json`, `images_<GUID>.json`, `images.lock`). Она создаётся по мере необходимости, её содержимое требуется сохранять при обновлениях; созданные программой файлы исключены из Git. В существующих установках файлы из прежней корневой папки `Data` нужно перенести в `Common/Data` при остановленных утилитах (включая клиентов SMB). Конфликтующие файлы нельзя перезаписывать без проверки; старые данные сохраняйте до проверки нового расположения.
 

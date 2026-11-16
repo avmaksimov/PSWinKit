@@ -17,7 +17,7 @@ if ($null -eq $utility) { return }
 $script:RepairMessages = $utility.Messages
 . (Join-Path $PSScriptRoot '..\Common\ImageCatalog.ps1')
 . (Join-Path $PSScriptRoot '..\Common\InstallationSources.ps1')
-. (Join-Path $PSScriptRoot 'ISORepair.ps1')
+. (Join-Path $PSScriptRoot 'Module-ISORepair.ps1')
 
 
 $script:DiskResult = $null

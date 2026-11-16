@@ -45,17 +45,20 @@ PSWinKit/
 │   └── README.ru.md
 ├── Check-Windows/
 │   ├── Check-Windows.ps1
+│   ├── Module-ISORepair.ps1
 │   ├── README.md
 │   └── README.ru.md
 └── Check-SystemPartitions/
     ├── Check-SystemPartitions.ps1
-    ├── Planning.ps1
-    ├── Execution.ps1
-    ├── Cleanup.ps1
-    ├── IsoWinRE.ps1
+    ├── Module-Planning.ps1
+    ├── Module-Execution.ps1
+    ├── Module-Cleanup.ps1
+    ├── Module-IsoWinRE.ps1
     ├── README.md
     └── README.ru.md
 ```
+
+The main script named after each utility is its only entry point. `Module-*.ps1` files are internal auxiliary modules and must not be launched directly.
 
 `Common/Data` is the shared **runtime** directory for the Windows ISO catalog (`images.json`, `images_<GUID>.json`, `images.lock`). It is created as necessary and must be preserved on update; generated content is ignored by Git. Existing installations must move catalog files from the former root `Data` directory into `Common/Data` with all utilities stopped (including SMB clients). Never overwrite a conflicting catalog or delete the original before verifying the new location.
 

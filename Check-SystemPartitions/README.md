@@ -40,15 +40,15 @@ No required parameters. The interactive workflow is: diagnose and show the curre
 | File | Responsibility |
 |---|---|
 | `Check-SystemPartitions.ps1` | Entry point, disk diagnostics, physical partition table, workflow selection, confirmations, and final results. |
-| `Planning.ps1` | **Read-only** Recovery/image assessment and GPT/MBR geometry calculations, including choosing right-side expansion, rebuild after C:, or new Recovery before D:. |
-| `Execution.ps1` | Safety preflight, SHA-256 checked backups, C:/Recovery changes, REAgentC registration and final verification; supports disabled WinRE both in-place and with insufficient Recovery space. |
-| `IsoWinRE.ps1` | Finds known or mounted Windows ISO sources, attaches ISO files, selects an image index and extracts `Winre.wim` with 7-Zip/DISM. |
+| `Module-Planning.ps1` | **Read-only** Recovery/image assessment and GPT/MBR geometry calculations, including choosing right-side expansion, rebuild after C:, or new Recovery before D:. |
+| `Module-Execution.ps1` | Safety preflight, SHA-256 checked backups, C:/Recovery changes, REAgentC registration and final verification; supports disabled WinRE both in-place and with insufficient Recovery space. |
+| `Module-IsoWinRE.ps1` | Finds known or mounted Windows ISO sources, attaches ISO files, selects an image index and extracts `Winre.wim` with 7-Zip/DISM. |
 | `../Common/ImageCatalog.ps1` | Shared `Common/Data/images.json` catalog: read, GUID-fragment publication, Windows/SMB locks, atomic merging and `.tmp` cleanup; reusable by `Check-Windows` later. |
-| `Cleanup.ps1` | Audits obsolete partition candidates, boot dependencies, content safety, and individual deletion confirmations. |
+| `Module-Cleanup.ps1` | Audits obsolete partition candidates, boot dependencies, content safety, and individual deletion confirmations. |
 | `../Common/Common.ps1` | Shared launch, elevation, localization, and exit/duration handling. |
 | `../Common/Languages/en.psd1`, `ru.psd1` | English and Russian localized messages. |
 
-The entry script dot-sources the other modules. `RecoveryRepair.ps1` is no longer required: its planning and execution functions have been moved into the corresponding existing modules.
+Only `Check-SystemPartitions.ps1` is launched directly; it loads the auxiliary modules automatically.
 
 ## Shared Windows ISO catalog
 
