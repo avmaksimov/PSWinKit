@@ -130,13 +130,10 @@ function Get-CSSevenZipPath {
 # Common catalog is shared by Check-SystemPartitions and future Check-Windows.
 # No local machine-specific cache is created.
 . (Join-Path $PSScriptRoot '..\Common\ImageCatalog.ps1')
+. (Join-Path $PSScriptRoot '..\Common\InstallationSources.ps1')
 
 function Get-CSInstallationSourceAtRoot([string]$root) {
-    foreach ($name in @('sources\install.wim', 'sources\install.esd', 'sources\install.swm')) {
-        $candidate = Join-Path $root $name
-        if ([IO.File]::Exists($candidate)) { return $candidate }
-    }
-    return $null
+    return (Get-PSWinKitInstallationImageAtRoot $root)
 }
 
 function Get-CSInstallationSource([string]$letter) {
@@ -144,65 +141,16 @@ function Get-CSInstallationSource([string]$letter) {
 }
 
 function Get-CSSplitWimPattern([string]$source) {
-    $folder = Split-Path -Path $source -Parent
-    $parts = @(Get-ChildItem -LiteralPath $folder -Filter 'install*.swm' -File -ErrorAction Stop |
-        Where-Object { $_.Name -match '(?i)^install(?:[2-9]|[1-9][0-9]+)?\.swm$' })
-    if ($parts.Count -eq 0 -or -not [IO.File]::Exists($source)) {
-        throw $m.CSIsoSplitMissingSource
-    }
-    $numbers = @($parts | ForEach-Object {
-        if ($_.Name -ieq 'install.swm') { 1 }
-        else { [int]([regex]::Match($_.Name, '(?i)^install([0-9]+)\.swm$').Groups[1].Value) }
-    })
-    $max = [int](($numbers | Measure-Object -Maximum).Maximum)
-    for ($n = 2; $n -le $max; $n++) {
-        if ($numbers -notcontains $n) { throw ($m.CSIsoSplitMissingPart -f $n) }
-    }
-    return (Join-Path $folder 'install*.swm')
+    # Shared SWM validation is reused by both diagnostic utilities.
+    return (Get-PSWinKitSplitWimPattern $source)
 }
 
 function Get-CSMountedISOOrigin([string]$letter) {
-    if ($letter -notmatch '^[A-Za-z]$') { return $null }
-    # Win32_CDROMDrive.DeviceID is a PnP identifier (SCSI\CDROM&...), NOT
-    # the device path accepted by Get-DiskImage. Resolve \\.\CDROMn via its
-    # actual mounted volume; this also works for guest-mounted network ISOs.
-    foreach ($number in 0..31) {
-        try {
-            $image = Get-DiskImage -DevicePath ('\\.\CDROM{0}' -f $number) -ErrorAction Stop
-            if (-not $image.Attached -or
-                [string]$image.ImagePath -notmatch '(?i)\.iso$' -or
-                -not [IO.File]::Exists([string]$image.ImagePath)) { continue }
-            $volumes = @($image | Get-Volume -ErrorAction Stop)
-            foreach ($volume in $volumes) {
-                if ([string]$volume.DriveLetter -ieq $letter) {
-                    return [string]$image.ImagePath
-                }
-            }
-        } catch { } # The CDROM number may not exist or may not be an ISO.
-    }
-    # Physical/host-managed DVD: its ISO path is not available in the guest.
-    return $null
+    return (Get-PSWinKitMountedISOOrigin $letter)
 }
 
 function Mount-CSInstallationISO([string]$path) {
-    $full = (Resolve-Path -LiteralPath $path -ErrorAction Stop).ProviderPath
-    if ([IO.Path]::GetExtension($full) -ine '.iso' -or -not [IO.File]::Exists($full)) {
-        throw ($m.CSIsoInvalidPath -f $path)
-    }
-    $image = Get-DiskImage -ImagePath $full -ErrorAction Stop
-    if (-not $image.Attached) {
-        Write-Host ($m.CSIsoMountingFile -f $full) -ForegroundColor Gray
-        $image = Mount-DiskImage -ImagePath $full -PassThru -ErrorAction Stop
-    }
-    $volumes = @($image | Get-Volume -ErrorAction Stop |
-        Where-Object { $_.DriveLetter })
-    $sources = @()
-    foreach ($volume in $volumes) {
-        $source = Get-CSInstallationSource ([string]$volume.DriveLetter)
-        if ($source) { $sources += $source }
-    }
-    if ($sources.Count -ne 1) { throw ($m.CSIsoMountedInvalid -f $full) }
-    return [pscustomobject]@{ Source = $sources[0]; ISOPath = $full }
+    return (Mount-PSWinKitInstallationISO -Path $path -MountMessage $m.CSIsoMountingFile)
 }
 
 function Get-CSCatalogMatchingISOs {

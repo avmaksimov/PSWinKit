@@ -14,6 +14,9 @@ WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
 if ($null -eq $utility) { return }
 $script:RepairMessages = $utility.Messages
+. (Join-Path $PSScriptRoot '..\Common\ImageCatalog.ps1')
+. (Join-Path $PSScriptRoot '..\Common\InstallationSources.ps1')
+. (Join-Path $PSScriptRoot 'ISORepair.ps1')
 
 
 $script:DiskResult = $null
@@ -60,21 +63,23 @@ function Format-ExitCode {
 
 function Find-ImageAtPath {
     param([string]$Path)
-    if ([string]::IsNullOrEmpty($Path)) { return $null }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     $value = $Path.Trim().Trim('"')
-    if ($value -match '^[A-Za-z]:$') { $value = $value + '\' }
-    if ($value -match '^[A-Za-z]$') { $value = $value + ':\' }
+    if ($value -match '^[A-Za-z]$') { $value += ':\' }
+    elseif ($value -match '^[A-Za-z]:$') { $value += '\' }
     if (-not (Test-Path -LiteralPath $value)) { return $null }
     $item = Get-Item -LiteralPath $value -ErrorAction Stop
     if (-not $item.PSIsContainer) {
-        if ($item.Extension -match '^\.(wim|esd)$') { return $item.FullName }
+        if ($item.Extension -ieq '.iso') {
+            $selected = Mount-PSWinKitInstallationISO $item.FullName
+            $script:RepairISOOrigin = [string]$selected.ISOPath
+            return [string]$selected.Source
+        }
+        if ($item.Extension -match '^(?i:\.(wim|esd))$' -or
+            $item.Name -ieq 'install.swm') { return [string]$item.FullName }
         return $null
     }
-    foreach ($relative in @('sources\install.wim', 'sources\install.esd', 'install.wim', 'install.esd')) {
-        $candidate = Join-Path $item.FullName $relative
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
-    }
-    return $null
+    return (Get-PSWinKitInstallationImageAtRoot $item.FullName)
 }
 
 function Find-ImagesOnDrives {
@@ -107,10 +112,13 @@ function Find-ImagesOnDrives {
 }
 
 function Choose-Image {
-    param([switch]$AskForDrive)
+    param([switch]$AskForDrive, $OsProfile)
     # After failed DISM without ISO, ask for the mounted drive directly.
     # For other scenarios, retain the existing automatic image discovery.
     if (-not $AskForDrive) {
+        # Common ISO catalog takes precedence, but every entry is checked again.
+        $cached = Get-RepairImageFromCatalog -OsProfile $OsProfile
+        if ($cached) { return [string]$cached }
         Write-Host ''
         Write-Host $script:RepairMessages.SearchingAvailableDrivesFor -ForegroundColor Cyan
         $found = @(Find-ImagesOnDrives)
@@ -724,7 +732,8 @@ function Offer-InPlaceWindowsSetup {
 
 function Try-RepairFromImage {
     param([string]$OsCaption, $OsProfile, [bool]$IsServer, [switch]$AskForDrive)
-    $image = Choose-Image -AskForDrive:$AskForDrive
+    $script:RepairISOOrigin = $null
+    $image = Choose-Image -AskForDrive:$AskForDrive -OsProfile $OsProfile
     if ($null -eq $image) { return $null }
     $index = Choose-ImageIndex -ImagePath $image -OsCaption $OsCaption -OsProfile $OsProfile -IsServer $IsServer
     if ($null -eq $index) { return $null }
@@ -746,6 +755,12 @@ function Try-RepairFromImage {
             Write-Host $script:RepairMessages.VersionsDifferTheImage -ForegroundColor Yellow
             Write-Host $script:RepairMessages.DISMRestoreHealthNeedsThe -ForegroundColor Yellow
         }
+    }
+    Save-RepairISOHistory -ImagePath $image -ImageIndex $index -Details $details
+    if ([IO.Path]::GetExtension($image) -ieq '.swm') {
+        # The native online repair source cannot be a split SWM. Export the
+        # validated selected index, use temporary WIM:1, then clean staging.
+        return (Invoke-RepairFromSplitWim -ImagePath $image -ImageIndex $index -OriginalDetails $details)
     }
     return (Run-Dism -ImagePath $image -ImageIndex $index)
 }
@@ -938,6 +953,10 @@ try {
     # Never start a repair operation from finally: only cleanup belongs here.
     if ($script:TranscriptOn) {
         try { Stop-Transcript | Out-Null } catch { }
+    }
+    if ($script:RepairCatalogTouched) {
+        try { Merge-PSWinKitImageCatalog }
+        catch { Write-Host ($script:RepairMessages.ISOHistoryMergeFailed -f $_.Exception.Message) -ForegroundColor Yellow }
     }
     if ($script:RestartInitiated) { $utility.PauseOnExit = $false }
     Stop-Utility -Utility $utility
