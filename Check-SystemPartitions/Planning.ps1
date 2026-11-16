@@ -11,7 +11,8 @@ $script:CSNewNtfsAllowance = [int64]64MB
 $script:CSCosmeticLimit = [int64]256MB
 $script:CSBeautyStep = [int64](10GB)
 
-function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery, [bool]$SkipISO = $false) {
+function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery,
+        [bool]$SkipISO = $false, [bool]$AllowLegacyRoot = $false) {
     $out = [ordered]@{
         Found = $false; Verified = $false; Source = ''; WIMBytes = [int64]0
         ExtraBytes = [int64]0; Existing = $null; UsedBytes = $null
@@ -36,7 +37,7 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery, [boo
             try {
                 $root = Open-CSRecoveryMount ([int]$disk.Number) ([int]$candidate.PartitionNumber)
                 $mountOpened = $true
-                $folder = Assert-CSRecoveryContent $root
+                $folder = Get-CSRecoveryWimFolder $root $AllowLegacyRoot
                 $candidatePath = Join-Path $folder 'Winre.wim'
                 if ([IO.File]::Exists($candidatePath)) {
                     $path = $candidatePath
@@ -98,21 +99,11 @@ function Get-CSImageAssessment($disk, $c, $parts, $reInfo, $activeRecovery, [boo
                 Close-CSRecoveryMount ([int]$disk.Number)
                 $mountOpened = $false
             }
-            $local = Join-Path $env:windir 'System32\Recovery\Winre.wim'
-            if ([IO.File]::Exists($local)) {
-                try {
-                    Assert-CSWim $local
-                    $path = $local
-                } catch {
-                    if ($null -ne $activeRecovery -or $reInfo.Enabled -or
-                        @($parts | Where-Object { Test-RecoveryPartition $_ ([string]$disk.PartitionStyle) }).Count -gt 0) {
-                        throw
-                    }
-                    Write-Host $m.CSIsoLocalInvalid -ForegroundColor Yellow
-                }
-                if ($path) { $out.Source = $m.CS26SourceLocal }
-                # No measured source-volume usage is applicable for a newly
-                # created Recovery: use the from-scratch policy instead.
+            $local = Find-CSLocalWinREImage
+            if ($null -ne $local) {
+                $path = $local
+                $out.Source = $m.CS26SourceLocal
+                # An image on C: is not evidence of an image on Recovery.
                 $out.Existing = $null
                 $out.UsedBytes = $null
                 $out.FreeBytes = $null
@@ -368,7 +359,7 @@ function Get-CSInactiveRecoveryCandidate($disk, $c, $parts, $reInfo) {
 # without writing to it. For inactive Recovery the source label must not say
 # "registered", and registration is allowed only if the WIM was found THERE.
 function Get-CSInactiveRecoveryAssessment($disk, $c, $parts, $reInfo, $candidate) {
-    $result = Get-CSImageAssessment $disk $c $parts $reInfo $candidate
+    $result = Get-CSImageAssessment $disk $c $parts $reInfo $candidate $false $true
     # Report the real source even when that partition is too small to use.
     if ($result.Verified -and $null -ne $result.Existing -and
         [int]$result.Existing.PartitionNumber -eq [int]$candidate.PartitionNumber -and

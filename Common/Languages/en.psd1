@@ -551,6 +551,8 @@
         CSInPlaceAlreadyExists = 'Winre.wim appeared on the Recovery partition after preflight. Replacement canceled.'
         CSInPlaceNotEnough = 'Not enough space: {0} free, image {1}, required remaining free space including allowance {2}.'
         CSInPlaceTempRetained = 'Could not remove temporary image on Recovery: {0}'
+        CSInPlaceDirectWarning = 'Recovery has insufficient space for an atomic replacement. The invalid Winre.wim must be removed before writing the replacement. A failure may temporarily leave WinRE unavailable; verified backups of both the original and replacement images will be kept on C:. Disk partitions will not change.'
+        CSInPlaceDirectConfirm = 'Proceed with a NON-ATOMIC Winre.wim replacement after staging both images on C:?'
         CSInPlaceFailureRetain = 'Repair did not complete. Keep the backup of the original Winre.wim and settings and inspect Windows RE manually.'
         CSReEnableTitle = 'Windows RE standard enable attempt'
         CSReEnableQuestion = 'Try enabling Windows RE using reagentc /enable (no partition changes)?'

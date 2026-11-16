@@ -908,13 +908,14 @@ try {
         try {
             # Reject unexpected existing content BEFORE searching for ISO.
             $null = Assert-CSInPlaceRestorePreflight $disk $c $parts $reInfo $inactiveRecovery
-            $localSource = Join-Path $env:windir 'System32\Recovery\Winre.wim'
+            # Reuse either of the two approved, verified local sources on C:
+            # rather than prompting for ISO when a usable WIM is already here.
             if ($assessment.Verified -and $null -eq $assessment.Existing -and
-                [string]$assessment.ImagePath -ieq [string]$localSource -and
-                [IO.File]::Exists($localSource)) {
-                $restoreImage = $localSource
+                (Test-CSLocalWinRESource ([string]$assessment.ImagePath))) {
+                $restoreImage = [string]$assessment.ImagePath
             } else {
-                $restoreImage = Get-CSISOImage
+                $restoreImage = Find-CSLocalWinREImage
+                if (-not $restoreImage) { $restoreImage = Get-CSISOImage }
             }
             if ($restoreImage) {
                 $restorePreview = Get-CSInPlaceRestorePreview $disk $c $parts `
@@ -929,6 +930,9 @@ try {
                     (Format-DetailedSize $restorePreview.FreeBefore))
                 Write-Host ($m.CSInPlaceFreeAfter -f
                     (Format-DetailedSize $restorePreview.FreeAfterCopy))
+                if ($restorePreview.ReplacementMode -eq 'Direct') {
+                    Write-Host $m.CSInPlaceDirectWarning -ForegroundColor Yellow
+                }
                 Write-Host ($m.CSInPlaceRequiredFree -f
                     (Format-DetailedSize $restorePreview.RequiredFree),
                     (Format-DetailedSize $restorePreview.ExtraReserve))
@@ -940,8 +944,16 @@ try {
                 $question = if ($restorePreview.OriginalExists) {
                     $m.CSInPlaceReplaceQuestion
                 } else { $m.CSInPlaceApplyQuestion }
-                if ((Read-PSWinKitChoice -Prompt $question -Choices @('Y', 'N') `
-                        -Messages $utility.CommonMessages) -eq 'Y') {
+                $approved = ((Read-PSWinKitChoice -Prompt $question -Choices @('Y', 'N') `
+                    -Messages $utility.CommonMessages) -eq 'Y')
+                if ($approved -and $restorePreview.ReplacementMode -eq 'Direct') {
+                    # Separate opt-in for a NON-ATOMIC overwrite after an
+                    # externally verified rescue backup; default is NO.
+                    $approved = ((Read-PSWinKitChoice -Prompt $m.CSInPlaceDirectConfirm `
+                        -Choices @('Y', 'N') -Default 'N' `
+                        -Messages $utility.CommonMessages) -eq 'Y')
+                }
+                if ($approved) {
                     Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
                         $inactiveRecovery $restoreImage $restorePreview
                     Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
