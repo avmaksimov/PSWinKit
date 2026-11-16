@@ -47,7 +47,18 @@ $script:ChkntfsExe = Join-Path $script:ProgramDirectory 'chkntfs.exe'
 
 function Format-ExitCode {
     param([int]$Code)
-    return ('{0} (0x{1:X8})' -f $Code, ([BitConverter]::ToUInt32([BitConverter]::GetBytes($Code), 0)))
+    # Preserve the exact 32-bit exit code without an unnecessary decimal copy.
+    return ('0x{0:X8}' -f ([BitConverter]::ToUInt32([BitConverter]::GetBytes($Code), 0)))
+}
+
+function Format-RepairToolResult {
+    param([int]$Code, [switch]$Dism)
+    if ($Code -eq 0) { return 'OK' }
+    $hexCode = Format-ExitCode $Code
+    if ($Dism -and $Code -eq 3010) {
+        return ($script:RepairMessages.ToolResultRestartRequired -f $hexCode)
+    }
+    return ($script:RepairMessages.ToolResultError -f $hexCode)
 }
 
 function Find-ImageAtPath {
@@ -369,8 +380,8 @@ function Run-Dism {
     # In particular, Ctrl+C must not trigger the ISO prompt or SFC.
     $arguments = [string]::Join(' ', [string[]]$argList)
     $code = Invoke-RepairExecutable -Executable $script:DismExe -Arguments $arguments
-    $color = if (($code -eq 0) -or ($code -eq 3010)) { 'Green' } else { 'Red' }
-    Write-Host ('DISM: ' + (Format-ExitCode $code)) -ForegroundColor $color
+    $color = if ($code -eq 0) { 'Green' } elseif ($code -eq 3010) { 'Yellow' } else { 'Red' }
+    Write-Host ('DISM: ' + (Format-RepairToolResult -Code $code -Dism)) -ForegroundColor $color
     if ($code -eq -2146498283) {
         Write-Host $script:RepairMessages.Error0x800F0915InspectCBS -ForegroundColor Yellow
     }
@@ -896,12 +907,12 @@ try {
     }
     if ($script:VolumeScheduled) { Write-Host $script:RepairMessages.RepairScheduledAtStartup -ForegroundColor Yellow }
     if ($null -ne $script:DiskResult) {
-        Write-Host ('DISM: ' + (Format-ExitCode $script:DiskResult))
+        Write-Host ('DISM: ' + (Format-RepairToolResult -Code $script:DiskResult -Dism))
     } else {
         Write-Host $script:RepairMessages.DISMNotRunOr
     }
     if ($null -ne $script:SfcResult) {
-        Write-Host ('SFC:  ' + (Format-ExitCode $script:SfcResult))
+        Write-Host ('SFC:  ' + (Format-RepairToolResult -Code $script:SfcResult))
     } else {
         Write-Host $script:RepairMessages.SFCNotRun
     }
@@ -927,15 +938,6 @@ try {
     if ($script:DiskResult -eq 3010) { Write-Host $script:RepairMessages.DISMReportedThatA -ForegroundColor Yellow }
 
     Write-Host ''
-    Write-Host $script:RepairMessages.ToViewTheResult -ForegroundColor Cyan
-    if ($script:LogPath -ne $null -and (Test-Path -LiteralPath $script:LogPath)) {
-        # Quoting with doubled apostrophes keeps the command copyable even
-        # when the log directory contains apostrophes.
-        $quotedLog = $script:LogPath.Replace("'", "''")
-        Write-Host ("Get-Content -LiteralPath '{0}' | Select-Object -Last 80" -f $quotedLog)
-    } else {
-        Write-Host 'Get-ChildItem "$env:TEMP\WinRepair_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content | Select-Object -Last 80'
-    }
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
         Write-Host $script:RepairMessages.RecentCharacteristicCBSErrors -ForegroundColor Yellow
         Write-Host 'Select-String -Path "$env:windir\Logs\CBS\CBS.log" -Pattern "CSI Payload Corrupt","CBS_E_","Missing replacement","Failed to resolve","0x800f" | Select-Object -Last 30'
