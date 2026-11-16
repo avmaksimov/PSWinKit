@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+. (Join-Path $PSScriptRoot '..\Common\Questions.ps1')
 $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator `
     -LanguageFile $LanguageFile
 if ($null -eq $utility) { return }
@@ -585,38 +586,6 @@ function Get-PreviewBounds($usableBounds, $originalParts) {
     foreach ($part in $sorted) { $edge = [math]::Max($edge, (Get-PartitionEnd $part)) }
     return [pscustomobject]@{ Start = [int64]$sorted[0].Offset; End = [int64]$edge }
 }
-function Read-YesNo([string]$prompt, [switch]$DefaultYes, [switch]$DefaultNo) {
-    if ($DefaultYes -and $DefaultNo) { throw 'Only one default may be specified.' }
-    # Visually separate the final destructive confirmation from the backup
-    # acknowledgement and other preflight output, in every language.
-    if ($prompt -eq $m.CSExecFinalConfirm -or $prompt -eq $m.CSNewFinalConfirm -or
-        $prompt -eq $m.CSFinalConfirmationQuestion) {
-        Write-Host ''
-    }
-    while ($true) {
-        $suffix = if ($DefaultYes) { $m.CSYesNoDefaultYes } elseif ($DefaultNo) {
-            $m.CSYesNoDefaultNo
-        } else { $m.CSYesNo }
-        $answer = (Read-Host ($prompt + ' ' + $suffix)).Trim().ToUpperInvariant()
-        if ($answer -eq 'Y') { return $true }
-        if ($answer -eq 'N') { return $false }
-        if ($answer -eq '' -and $DefaultYes) { return $true }
-        if ($answer -eq '' -and $DefaultNo) { return $false }
-        Write-Host $m.CSInvalidYesNo -ForegroundColor Yellow
-    }
-}
-
-function Read-CSRepairRoundingChoice([int64]$TargetExplorerGiB) {
-    while ($true) {
-        $prompt = $m.CSAskRepairWithOptionalRounding -f $TargetExplorerGiB
-        $answer = (Read-Host $prompt).Trim().ToUpperInvariant()
-        if ($answer -eq '') { return 'Y' }
-        if ($answer -in @('Y', 'R', 'N')) { return $answer }
-        Write-Host $m.CSInvalidRepairRoundingChoice -ForegroundColor Yellow
-    }
-}
-
-
 # Explicit MiB allocation choice for new Recovery (never implicit expansion).
 function Read-CSRecoveryCExtraMiB([int64]$maximum) {
     while ($true) {
@@ -741,7 +710,7 @@ try {
     if (-not $reInfo.Enabled) {
         Write-Host ''
         Write-Host ('=== ' + $m.CSReEnableTitle + ' ===') -ForegroundColor Cyan
-        if (Read-YesNo $m.CSReEnableQuestion) {
+        if ((Read-PSWinKitChoice -Prompt $m.CSReEnableQuestion -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y') {
             Write-Host $m.CSReEnableRunning -ForegroundColor Cyan
             $enableError = ''
             $enableExitCode = $null
@@ -955,7 +924,7 @@ try {
                     (Format-DetailedSize $restorePreview.RequiredFree),
                     (Format-DetailedSize $restorePreview.ExtraReserve))
                 Write-Host $m.CSInPlaceNoRepartition -ForegroundColor DarkGray
-                if (Read-YesNo $m.CSInPlaceApplyQuestion) {
+                if ((Read-PSWinKitChoice -Prompt $m.CSInPlaceApplyQuestion -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y') {
                     Invoke-CSRestoreExistingRecovery $disk $c $parts $reInfo `
                         $inactiveRecovery $restoreImage $restorePreview
                     Show-CSFinalSummary -OriginalDisk $disk -OriginalC $c `
@@ -1001,7 +970,7 @@ try {
         if ($null -ne $smallPlan) {
             Write-Host ''
             Write-Host ('=== ' + $m.CSPlanSelectionTitle + ' ===') -ForegroundColor Cyan
-            if (-not (Read-YesNo $m.CSInactiveSmallSelect)) {
+            if ((Read-PSWinKitChoice -Prompt $m.CSInactiveSmallSelect -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
                 Write-Host $m.CSExecCancelled -ForegroundColor Yellow
                 $script:CSRunHandled = $true
                 return
@@ -1153,8 +1122,12 @@ try {
         if ($canPreviewC) {
             if ($null -eq $activeRecovery) {
                 $optimiseC = if ($proposal.MigratingWinREOnC) {
-                    Read-YesNo $m.CSMBRAskMove
-                } else { Read-YesNo $m.CSAskCreateRecovery }
+                    (Read-PSWinKitChoice -Prompt $m.CSMBRAskMove `
+                        -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y'
+                } else {
+                    (Read-PSWinKitChoice -Prompt $m.CSAskCreateRecovery `
+                        -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y'
+                }
                 if ($optimiseC) {
                     # Only the surplus beyond the planned Recovery size can
                     # be assigned to C:. Leave C: unchanged by default.
@@ -1184,7 +1157,10 @@ try {
             } elseif ($proposal.Beauty -and $proposal.MustRepair) {
                 # Repair is mandatory for a healthy WinRE plan; cosmetic sizing
                 # is optional. R requests a fresh technical-only geometry.
-                $choice = Read-CSRepairRoundingChoice ([int64]$proposal.TargetExplorerGiB)
+                $choice = Read-PSWinKitChoice `
+                    -Prompt ($m.CSAskRepairWithOptionalRounding -f $proposal.TargetExplorerGiB) `
+                    -Choices @('Y', 'R', 'N') -Default 'Y' `
+                    -Messages $utility.CommonMessages
                 if ($choice -eq 'R') {
                     $technicalPlan = Get-CSPlanningDecision $disk $c $parts $reInfo `
                         $activeRecovery $assessment $vol $usableBounds `
@@ -1200,16 +1176,22 @@ try {
                 }
                 $optimiseC = ($choice -ne 'N')
             } elseif ($proposal.Beauty) {
-                $optimiseC = Read-YesNo ($m.CSAskOptimiseCWithRE -f
-                    $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber) -DefaultYes
+                $optimiseC = (Read-PSWinKitChoice `
+                    -Prompt ($m.CSAskOptimiseCWithRE -f
+                        $proposal.TargetExplorerGiB, $activeRecovery.PartitionNumber) `
+                    -Choices @('Y', 'N') -Default 'Y' `
+                    -Messages $utility.CommonMessages) -eq 'Y' 
             } elseif ($reInfo.Enabled -and $null -ne $assessment.FreeBytes -and
                 [int64]$assessment.FreeBytes -lt $script:CSFreeReserve -and
                 [int64]$proposal.ChangeBytes -lt 0) {
-                $optimiseC = Read-YesNo ($m.CSAskIncreaseRecovery -f
-                    (Format-DetailedSize ([int64]$proposal.Geometry.NewSize)),
-                    (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes))))
+                $optimiseC = (Read-PSWinKitChoice `
+                    -Prompt ($m.CSAskIncreaseRecovery -f
+                        (Format-DetailedSize ([int64]$proposal.Geometry.NewSize)),
+                        (Format-DetailedSize ([int64][math]::Abs($proposal.ChangeBytes)))) `
+                    -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y' 
             } else {
-                $optimiseC = Read-YesNo $m.CS26AskRecoveryRepair
+                $optimiseC = (Read-PSWinKitChoice -Prompt $m.CS26AskRecoveryRepair `
+                    -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y' 
             }
         }
         foreach ($candidate in $candidates) {
@@ -1224,7 +1206,11 @@ try {
                 Write-Host ($m.CSSelectionBlocked -f $candidate.PartitionNumber) -ForegroundColor Yellow
                 continue
             }
-            if (Read-YesNo ($m.CSAskDeletePartition -f $candidate.PartitionNumber, ($details -join ', ')) -DefaultNo) {
+            if ((Read-PSWinKitChoice `
+                    -Prompt ($m.CSAskDeletePartition -f $candidate.PartitionNumber,
+                        ($details -join ', ')) `
+                    -Choices @('Y', 'N') -Default 'N' `
+                    -Messages $utility.CommonMessages) -eq 'Y') {
                 $selected.Add([int]$candidate.PartitionNumber)
             }
         }

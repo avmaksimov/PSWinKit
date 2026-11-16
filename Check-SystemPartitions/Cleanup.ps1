@@ -311,13 +311,15 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
     }
     if (-not $BackupAlreadyConfirmed) {
         Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
-        if (-not (Read-YesNo $m.CSExecBackupConfirmed)) {
+        if ((Read-PSWinKitChoice -Prompt $m.CSExecBackupConfirmed `
+                -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
             return
         }
     }
     Write-Host $m.CS28DeletionFinalWarning -ForegroundColor Red
-    if (-not (Read-YesNo $m.CS28DeletionFinalQuestion)) {
+    if ((Read-PSWinKitChoice -Prompt $m.CS28DeletionFinalQuestion `
+            -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $m.CSExecCancelled -ForegroundColor Yellow
         return
     }
@@ -348,8 +350,11 @@ function Invoke-CSOptionalPartitionDeletion($disk, $c, $audits, [switch]$BackupA
             $check.PartitionGuid -ne $audit.PartitionGuid) {
             throw $m.CS28AuditChanged
         }
-        if (-not (Read-YesNo ($m.CS28DeleteOneQuestion -f $candidate.PartitionNumber,
-                (Format-PartitionSize ([int64]$candidate.Size))))) {
+        if ((Read-PSWinKitChoice `
+                -Prompt ($m.CS28DeleteOneQuestion -f $candidate.PartitionNumber,
+                    (Format-PartitionSize ([int64]$candidate.Size))) `
+                -Choices @('Y', 'N') -Default 'N' `
+                -Messages $utility.CommonMessages) -eq 'N') {
             Write-Host $m.CSExecCancelled -ForegroundColor Yellow
             continue
         }

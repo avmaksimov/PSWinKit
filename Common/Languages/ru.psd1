@@ -1,6 +1,9 @@
 ﻿# Centralized PSWinKit messages. UTF-8 with BOM (Windows PowerShell 5.1).
 @{
     'Common' = @{
+        ChoicePrompt = '[{0}]'
+        ChoicePromptDefault = '[{0}, Enter={1}]'
+        ChoiceInvalid = 'Введите один из вариантов: {0}.'
         Started            = 'Начало: {0}'
         Finished           = 'Окончание: {0}'
         Duration           = 'Длительность: {0}'
@@ -596,13 +599,8 @@
         CSSimulationDisclaimer      = 'Выбор влияет только на прогноз. НИ ОДИН раздел не удаляется.'
         CSAskSimulation             = 'Выбрать изменения для предварительного расчёта?'
         CSAskPartition              = 'Смоделировать отдельное удаление раздела {0} [{1}]?'
-        CSYesNo                     = '(Y/N)'
-        CSYesNoDefaultYes = '[Y/N, Enter=Y]'
-        CSYesNoDefaultNo = '[Y/N, Enter=N]'
-        CSAskRepairWithOptionalRounding = 'Восстановить WinRE: с округлением C: до {0} ГиБ (Y), без округления (R), отказаться (N)? [Y/R/N, Enter=Y]'
-        CSInvalidRepairRoundingChoice = 'Введите Y, R или N (Enter = Y).'
+        CSAskRepairWithOptionalRounding = 'Восстановить WinRE: с округлением C: до {0} ГиБ (Y), без округления (R), отказаться (N)?'
         CSTechnicalPlanUnavailable = 'Безопасный план восстановления WinRE без округления C: недоступен. Разделы не изменены.'
-        CSInvalidYesNo              = 'Введите Y или N.'
         CSPreviewTitle              = 'Расчёт геометрии'
         CSSelectedNumbers           = 'Условно удаляемые разделы: {0}'
         CSNoSelected                = 'Для удаления ничего не выбрано.'
@@ -861,7 +859,7 @@
         CSFsScanClean = 'Проверка NTFS на C: завершена. Ошибок файловой системы не обнаружено.'
         CSFsScanNeedsRepair = 'C: требует внимания (результат проверки: {0}; состояние тома: {1}).'
         CSFsScanExecutionStopped = 'Изменение разделов отменено: исправность NTFS на C: не подтверждена.'
-        CSFsScheduleQuestion = 'Запланировать Repair-Volume -{0} для C: (при необходимости — на следующую загрузку)? (Y/N)'
+        CSFsScheduleQuestion = 'Запланировать Repair-Volume -{0} для C: (при необходимости — на следующую загрузку)?'
         CSFsScheduleDeclined = 'Исправление не назначено, разделы не изменены.'
         CSFsScheduling = 'Выполняем Repair-Volume -{0} для C:, чтобы назначить офлайн-исправление...'
         CSFsScheduledReboot = 'Проверка и исправление C: назначены при загрузке. Перезагрузите Windows, проверьте NTFS и повторно запустите утилиту. Разделы не изменены; автоматической перезагрузки нет.'

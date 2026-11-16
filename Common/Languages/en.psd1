@@ -1,6 +1,9 @@
 ﻿# Centralized PSWinKit messages. UTF-8 with BOM (Windows PowerShell 5.1).
 @{
     'Common' = @{
+        ChoicePrompt = '[{0}]'
+        ChoicePromptDefault = '[{0}, Enter={1}]'
+        ChoiceInvalid = 'Enter one of these choices: {0}.'
         Started            = 'Started: {0}'
         Finished           = 'Finished: {0}'
         Duration           = 'Duration: {0}'
@@ -596,13 +599,8 @@
         CSSimulationDisclaimer      = 'Selections affect only the preview. NO partition is deleted.'
         CSAskSimulation             = 'Select changes for the read-only plan?'
         CSAskPartition              = 'Simulate optional removal of partition {0} [{1}]?'
-        CSYesNo                     = '(Y/N)'
-        CSYesNoDefaultYes = '[Y/N, Enter=Y]'
-        CSYesNoDefaultNo = '[Y/N, Enter=N]'
-        CSAskRepairWithOptionalRounding = 'Repair WinRE with C: rounded to {0} GiB (Y), without rounding (R), or cancel (N)? [Y/R/N, Enter=Y]'
-        CSInvalidRepairRoundingChoice = 'Enter Y, R, or N (Enter = Y).'
+        CSAskRepairWithOptionalRounding = 'Repair WinRE with C: rounded to {0} GiB (Y), without rounding (R), or cancel (N)?'
         CSTechnicalPlanUnavailable = 'No safe WinRE repair plan without C: rounding is available. Disk layout was not changed.'
-        CSInvalidYesNo              = 'Enter Y or N.'
         CSPreviewTitle              = 'Geometry preview'
         CSSelectedNumbers           = 'Hypothetically removed partitions: {0}'
         CSNoSelected                = 'No partitions selected for removal.'
@@ -861,7 +859,7 @@
         CSFsScanClean = 'C: NTFS check completed. No filesystem errors found.'
         CSFsScanNeedsRepair = 'C: needs attention (scan result: {0}; volume health: {1}).'
         CSFsScanExecutionStopped = 'Partition changes cancelled because C: NTFS was not verified healthy.'
-        CSFsScheduleQuestion = 'Schedule Repair-Volume -{0} for C: (possibly at the next startup)? (Y/N)'
+        CSFsScheduleQuestion = 'Schedule Repair-Volume -{0} for C: (possibly at the next startup)?'
         CSFsScheduleDeclined = 'Repair not scheduled; partitions have not changed.'
         CSFsScheduling = 'Running Repair-Volume -{0} on C: to schedule an offline fix...'
         CSFsScheduledReboot = 'C: check/repair is scheduled for startup. Restart Windows when convenient, verify NTFS, then rerun this utility. No partition changes; no automatic restart.'

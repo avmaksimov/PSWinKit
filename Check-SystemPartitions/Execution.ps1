@@ -397,7 +397,9 @@ function Confirm-CSSelectedChanges($disk, $c, $proposal, $geometry, $recovery, $
         Write-Host $m.CSConfirmOptionalSeparate -ForegroundColor Yellow
     }
     Write-Host $m.CSExecNeedBackup -ForegroundColor Yellow
-    return [bool](Read-YesNo $m.CSFinalConfirmationQuestion)
+    Write-Host ''
+    return ((Read-PSWinKitChoice -Prompt $m.CSFinalConfirmationQuestion `
+        -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'Y')
 }
 
 function Assert-CSLayoutUnchanged($disk, $snapshot) {
@@ -777,7 +779,8 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
         [string]$after.HealthStatus -in @('FullRepairNeeded','3'))
     if ($scanProblem) { $spotFixNeeded = $false }
     $mode = if ($spotFixNeeded) { 'SpotFix' } else { 'OfflineScanAndFix' }
-    if (-not (Read-YesNo ($m.CSFsScheduleQuestion -f $mode))) {
+    if ((Read-PSWinKitChoice -Prompt ($m.CSFsScheduleQuestion -f $mode) `
+            -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $m.CSFsScheduleDeclined -ForegroundColor Yellow
         return $false
     }
@@ -1840,7 +1843,9 @@ function Invoke-CSRestoreExistingRecovery($disk, $c, $parts, $reInfo, $candidate
 
 function Invoke-CSRegisterInactiveRecovery($disk, $c, $part, $reInfo) {
     if ($reInfo.Enabled) { throw $m.CSInactiveStateChanged }
-    if (-not (Read-YesNo ($m.CSInactiveRecoveryQuestion -f $part.PartitionNumber))) {
+    if ((Read-PSWinKitChoice `
+            -Prompt ($m.CSInactiveRecoveryQuestion -f $part.PartitionNumber) `
+            -Choices @('Y', 'N') -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $m.CSExecCancelled -ForegroundColor Yellow
         return $false
     }
