@@ -95,7 +95,6 @@
         Title = 'Проверка Windows'
 
         NotChecked = 'Не проверялся'
-        EnterYOrN = 'Введите Y или N.'
         CheckedDrives = 'Проверены диски: '
         UnableToListDrives = 'не удалось получить список'
         OnlySourcesInstallWim = 'Проверялись только стандартные пути sources\install.wim, sources\install.esd, sources\install.swm (и корень диска); без рекурсивного поиска.'

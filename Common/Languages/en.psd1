@@ -95,7 +95,6 @@
         Title = 'Check Windows'
 
         NotChecked = 'Not checked'
-        EnterYOrN = 'Enter Y or N.'
         CheckedDrives = 'Checked drives: '
         UnableToListDrives = 'unable to list drives'
         OnlySourcesInstallWim = 'Only standard sources\install.wim, sources\install.esd, sources\install.swm (or drive root) were checked; no recursive search.'

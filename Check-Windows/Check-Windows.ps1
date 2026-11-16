@@ -11,6 +11,7 @@ WinRepair: OS-aware Windows repair (Windows 7/Server 2008 R2 and newer).
 - Compatible with Windows PowerShell 2.0 (shipped with Windows 7).
 #>
 . (Join-Path $PSScriptRoot '..\Common\Common.ps1')
+. (Join-Path $PSScriptRoot '..\Common\Questions.ps1')
 $utility = Start-Utility -ScriptPath $PSCommandPath -RequireAdministrator
 if ($null -eq $utility) { return }
 $script:RepairMessages = $utility.Messages
@@ -43,18 +44,6 @@ $script:DismExe = Join-Path $script:ProgramDirectory 'dism.exe'
 $script:SfcExe = Join-Path $script:ProgramDirectory 'sfc.exe'
 $script:ChkdskExe = Join-Path $script:ProgramDirectory 'chkdsk.exe'
 $script:ChkntfsExe = Join-Path $script:ProgramDirectory 'chkntfs.exe'
-
-function Ask-YesNo {
-    param([string]$Question, [bool]$DefaultYes)
-    $defaultText = if ($DefaultYes) { 'Y' } else { 'N' }
-    while ($true) {
-        $answer = (Read-Host ("{0} [Y/N, Enter={1}]" -f $Question, $defaultText)).Trim().ToUpperInvariant()
-        if ($answer.Length -eq 0) { return $DefaultYes }
-        if (@('Д', 'ДА', 'Y', 'YES') -contains $answer) { return $true }
-        if (@('Н', 'НЕТ', 'N', 'NO') -contains $answer) { return $false }
-        Write-Host $script:RepairMessages.EnterYOrN -ForegroundColor Yellow
-    }
-}
 
 function Format-ExitCode {
     param([int]$Code)
@@ -401,7 +390,9 @@ function Run-Dism {
 # Schedule an offline repair only with the user's explicit approval.
 function Schedule-SystemVolumeCheck {
     param([string]$Drive)
-    if (-not (Ask-YesNo ($script:RepairMessages.ScheduleARepairOf -f $Drive) $true)) {
+    if ((Read-PSWinKitChoice -Prompt ($script:RepairMessages.ScheduleARepairOf -f $Drive) `
+            -Choices @('Y', 'N') -Default 'Y' `
+            -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $script:RepairMessages.StartupTimeCheckingWas -ForegroundColor Yellow
         return
     }
@@ -556,7 +547,9 @@ function Test-SystemVolume {
                     Write-Host (Get-VolumeStatusText -Status $status) -ForegroundColor Yellow
                     $spot = ($status -eq 'SpotFixNeeded')
                     $mode = if ($spot) { 'SpotFix' } else { 'OfflineScanAndFix' }
-                    if (Ask-YesNo ($script:RepairMessages.TryRepairVolume0 -f $mode, $drive) $true) {
+                    if ((Read-PSWinKitChoice -Prompt ($script:RepairMessages.TryRepairVolume0 -f $mode, $drive) `
+                            -Choices @('Y', 'N') -Default 'Y' `
+                            -Messages $utility.CommonMessages) -eq 'Y') {
                         try {
                             if ($spot) {
                                 $fix = @(Invoke-RepairVolume -DriveLetter $letter -Mode SpotFix)
@@ -710,7 +703,9 @@ function Offer-InPlaceWindowsSetup {
     Write-Host $script:RepairMessages.EditionArchitectureAndLanguage -ForegroundColor Green
     Write-Host $script:RepairMessages.CarefullyReviewBothEditions -ForegroundColor Yellow
     Write-Host ''
-    if (-not (Ask-YesNo ($script:RepairMessages.StartAnInPlace -f $args) $true)) {
+    if ((Read-PSWinKitChoice -Prompt ($script:RepairMessages.StartAnInPlace -f $args) `
+            -Choices @('Y', 'N') -Default 'Y' `
+            -Messages $utility.CommonMessages) -eq 'N') {
         Write-Host $script:RepairMessages.InstallationCanceledByThe
         return
     }
@@ -823,7 +818,9 @@ try {
     $skipWindowsRepair = $systemScheduled
     if ($systemNeedsAttention -and (-not $skipWindowsRepair)) {
         Write-Host $script:RepairMessages.FileSystemIntegrityCould -ForegroundColor Yellow
-        if (-not (Ask-YesNo $script:RepairMessages.ContinueWithDISMSFC $false)) {
+        if ((Read-PSWinKitChoice -Prompt $script:RepairMessages.ContinueWithDISMSFC `
+                -Choices @('Y', 'N') -Default 'N' `
+                -Messages $utility.CommonMessages) -eq 'N') {
             $skipWindowsRepair = $true
         }
     }
@@ -858,7 +855,9 @@ try {
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer
                     if ($null -ne $ret) { $script:DiskResult = $ret }
                     else { Write-Host $script:RepairMessages.NoRepairSourceSelected -ForegroundColor Yellow }
-                } elseif (Ask-YesNo $script:RepairMessages.RepairWithTheSelected $true) {
+                } elseif ((Read-PSWinKitChoice -Prompt $script:RepairMessages.RepairWithTheSelected `
+                        -Choices @('Y', 'N') -Default 'Y' `
+                        -Messages $utility.CommonMessages) -eq 'Y') {
                     $ret = Try-RepairFromImage -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -AskForDrive
                     if ($null -ne $ret) { $script:DiskResult = $ret }
                     else { Write-Host $script:RepairMessages.RetryUsingISOCanceled -ForegroundColor Yellow }
@@ -932,7 +931,10 @@ try {
     }
     if ($script:VolumeScheduled) {
         Write-Host $script:RepairMessages.SaveYourFilesBefore
-        $script:RestartRequested = Ask-YesNo $script:RepairMessages.RestartTheComputerNow $false
+        $script:RestartRequested = (Read-PSWinKitChoice `
+            -Prompt $script:RepairMessages.RestartTheComputerNow `
+            -Choices @('Y', 'N') -Default 'N' `
+            -Messages $utility.CommonMessages) -eq 'Y'
     }
     if ($script:RestartRequested) {
         try {
