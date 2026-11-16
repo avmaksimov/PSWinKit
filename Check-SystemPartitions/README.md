@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-**Check-SystemPartitions** builds on the idea behind [Check-WinRE](../Check-WinRE/README.md). While Check-WinRE focuses on checking and, if necessary, restoring the Windows Recovery Environment (WinRE), Check-SystemPartitions examines the system disk layout, checks WinRE health, and proposes partition optimization, including removal of unnecessary partitions.
+**Check-SystemPartitions** diagnoses and repairs the Windows Recovery Environment (WinRE), checks the system disk layout, and offers optional C:/Recovery optimization and carefully audited deletion of obsolete partitions. It supersedes the former Check-WinRE tool; the directory and executable name will be updated in a separate step.
 
 ## Features
 

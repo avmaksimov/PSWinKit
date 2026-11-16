@@ -10,7 +10,6 @@
 | --- | --- |
 | [Remove-Paths](Remove-Paths/README.md) | Interactively and permanently delete selected files and directories, including protected folders |
 | [Check-Windows](Check-Windows/README.md) | Check Windows health and optionally repair issues using CHKDSK, DISM and SFC |
-| [Check-WinRE](Check-WinRE/README.md) | Check WinRE and optionally restore it or repair supported GPT/MBR Recovery layouts |
 | [Check-SystemPartitions](Check-SystemPartitions/README.md) | Inspect system partitions, optimize C: and Recovery, and audit obsolete partitions for removal |
 
 ## Requirements and use
@@ -24,7 +23,6 @@ From a PowerShell console in the repository root:
 ```powershell
 .\Remove-Paths\Remove-Paths.ps1
 .\Check-Windows\Check-Windows.ps1
-.\Check-WinRE\Check-WinRE.ps1
 .\Check-SystemPartitions\Check-SystemPartitions.ps1
 ```
 
@@ -68,7 +66,6 @@ Before applying changes, verify the destination and the `INSTALL`, `REPLACE`, `U
 - [`Common/README.md`](Common/README.md) — **full shared API documentation and the development contract**.
 - [`Remove-Paths/README.md`](Remove-Paths/README.md) — Remove-Paths usage, behavior and limitations.
 - [`Check-Windows/README.md`](Check-Windows/README.md) — Check-Windows usage, safety and limitations.
-- [`Check-WinRE/README.md`](Check-WinRE/README.md) — WinRE repair, supported Recovery layouts and safety limits.
 - [`Check-SystemPartitions/README.md`](Check-SystemPartitions/README.md) — system disk diagnosis and layout optimization.
 - [`README.ru.md`](README.ru.md) — this overview in Russian.
 

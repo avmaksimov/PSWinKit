@@ -10,7 +10,6 @@
 | --- | --- |
 | [Remove-Paths](Remove-Paths/README.ru.md) | Интерактивное безвозвратное удаление выбранных файлов и каталогов, в том числе защищённых |
 | [Check-Windows](Check-Windows/README.ru.md) | Проверка Windows и исправление обнаруженных проблем через CHKDSK, DISM и SFC |
-| [Check-WinRE](Check-WinRE/README.ru.md) | Проверка WinRE и восстановление при необходимости, поддержка Recovery на GPT/MBR |
 | [Check-SystemPartitions](Check-SystemPartitions/README.ru.md) | Диагностика системных разделов, оптимизация C: и Recovery, проверка и удаление лишних разделов |
 
 ## Требования и запуск
@@ -24,7 +23,6 @@
 ```powershell
 .\Remove-Paths\Remove-Paths.ps1
 .\Check-Windows\Check-Windows.ps1
-.\Check-WinRE\Check-WinRE.ps1
 .\Check-SystemPartitions\Check-SystemPartitions.ps1
 ```
 
@@ -68,7 +66,6 @@ Expand-Archive -LiteralPath $zip -DestinationPath $dir
 - [`Common/README.ru.md`](Common/README.ru.md) — **полное описание общего интерфейса и обязательный контракт разработки**.
 - [`Remove-Paths/README.ru.md`](Remove-Paths/README.ru.md) — запуск, поведение и ограничения Remove-Paths.
 - [`Check-Windows/README.ru.md`](Check-Windows/README.ru.md) — запуск и ограничения Check-Windows.
-- [`Check-WinRE/README.ru.md`](Check-WinRE/README.ru.md) — восстановление WinRE, схемы Recovery и ограничения безопасности.
 - [`Check-SystemPartitions/README.ru.md`](Check-SystemPartitions/README.ru.md) — диагностика системного диска и оптимизация разметки.
 - [`README.md`](README.md) — обзор на английском языке.
 
