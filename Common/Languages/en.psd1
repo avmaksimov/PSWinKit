@@ -303,7 +303,7 @@
         ChangeCounts = 'Changes: {0} to install, {1} to replace, {2} to remove; {3} unchanged.'
         ChangeNotice = 'Only INSTALL, REPLACE and REMOVE files will be changed.'
         NoBackups = 'Other files are retained; no old-version backups are created.'
-        Confirm = 'Apply these changes? [Y/N]'
+        Confirm = 'Apply these changes?'
         Canceled = 'Canceled. No files were changed.'
         StageExists = 'Temporary destination already exists: {0}'
         HashMismatch = 'SHA-256 mismatch for {0}; originals were not touched.'

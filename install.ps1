@@ -15,17 +15,21 @@ $target = (Get-Location).ProviderPath
 # Executed from the freshly extracted PSWinKit source tree.
 # Destination is the caller's current working directory.
 . (Join-Path $PSScriptRoot 'Common\Common.ps1')
+. (Join-Path $PSScriptRoot 'Common\Questions.ps1')
 $fromUpdater = $PSBoundParameters.ContainsKey('Commit')
 $utility = $null
 if ($fromUpdater) {
     $languageFolder = Join-Path $PSScriptRoot 'Common\Languages'
     $selectedFile = Find-PSWinKitLanguageFile -Folder $languageFolder
-    $m = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile -Section 'install'
+    $translations = Import-PSWinKitTranslations -Folder $languageFolder -SelectedFile $selectedFile
+    $m = $translations['install']
+    $commonMessages = $translations['Common']
 }
 else {
     $utility = Start-Utility -ScriptPath $PSCommandPath
     if ($null -eq $utility) { return }
     $m = $utility.Messages
+    $commonMessages = $utility.CommonMessages
 }
 $versionDateUtc = ''
 $versionLabel = $m.UnknownVersion
@@ -350,7 +354,8 @@ try {
         Write-Host ''
         Write-Host ($m.ChangeCounts -f $installCount, $replaceCount, $removals.Count, $unchangedCount) -ForegroundColor Gray
         Write-Host ''
-        $choice = (Read-Host $m.Confirm).Trim().ToUpperInvariant()
+        $choice = Read-PSWinKitChoice -Prompt $m.Confirm -Choices @('Y', 'N') `
+            -Default 'Y' -Messages $commonMessages
         if ($choice -cne 'Y') {
             Write-Host $m.Canceled
             return
