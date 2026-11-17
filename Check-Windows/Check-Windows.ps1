@@ -950,12 +950,11 @@ try {
     if ($script:VolumeNeedsAttention) { $script:HadError = $true }
     if ($script:DiskResult -eq 3010) { Write-Host $script:RepairMessages.DISMReportedThatA -ForegroundColor Yellow }
 
-    Write-Host ''
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and ($script:DiskResult -ne 3010)) {
+        Write-Host ''
         Write-Host $script:RepairMessages.RecentCharacteristicCBSErrors -ForegroundColor Yellow
         Write-Host 'Select-String -Path "$env:windir\Logs\CBS\CBS.log" -Pattern "CSI Payload Corrupt","CBS_E_","Missing replacement","Failed to resolve","0x800f" | Select-Object -Last 30'
     }
-    Write-Host '=================================================='
     if (($null -ne $script:DiskResult) -and ($script:DiskResult -ne 0) -and
         ($script:DiskResult -ne 3010) -and (-not $script:VolumeScheduled)) {
         Offer-InPlaceWindowsSetup -OsCaption $os.Caption -OsProfile $profile -IsServer $isServer -OsVersion $version
