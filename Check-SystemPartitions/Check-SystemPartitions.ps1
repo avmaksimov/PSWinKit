@@ -93,10 +93,25 @@ function Format-FreeSpaceSize([int64]$bytes) {
     if ($bytes -ge $script:KiB) { return ($m.CSSizeKiB -f ([math]::Round($bytes / $script:KiB, 2))) }
     return ($m.CSSizeBytes -f $bytes)
 }
-# Native Windows exit codes are 32-bit values. Display their hexadecimal
-# representation without an unnecessary signed/decimal duplicate.
-function Format-CSExitCode([long]$code) {
-    return ('0x{0:X8}' -f ($code -band [long]4294967295))
+function Format-CSToolResult([long]$code, [string]$tool) {
+    $known = @{}
+    if ($tool -eq 'CHKDSK') {
+        $known = @{
+            '0x00000001' = $m.CSCHKDSKExitFixed
+            '0x00000002' = $m.CSCHKDSKExitCleanup
+            '0x00000003' = $m.CSCHKDSKExitNotFixed
+        }
+    } elseif ($tool -eq '7-Zip') {
+        $known = @{
+            '0x00000001' = $m.CS7ZipWarning
+            '0x00000002' = $m.CS7ZipFatal
+            '0x00000007' = $m.CS7ZipCommandLine
+            '0x00000008' = $m.CS7ZipMemory
+            '0x000000FF' = $m.CS7ZipCancelled
+        }
+    }
+    return (Format-PSWinKitToolResult -Code $code -Messages $utility.CommonMessages `
+        -ToolDescriptions $known)
 }
 function Format-DetailedSize([int64]$bytes) {
     if ($bytes -ge $script:GiB) {
@@ -722,7 +737,7 @@ try {
             try {
                 Invoke-CSExternal 'reagentc.exe' @('/enable')
             } catch {
-                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
                 $enableError = $_.Exception.Message
                 # REAgentC prints its own diagnosis. Report only the exit code
                 # rather than repeating the same failure in a second sentence.
@@ -754,7 +769,7 @@ try {
                             Write-Host ($m.CSReEnableVerifyWarning -f $check.Error) -ForegroundColor Yellow
                         }
                     } catch {
-                        if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                        if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
                         Write-Host ($m.CSReEnableVerifyWarning -f $_.Exception.Message) -ForegroundColor Yellow
                     }
                 } else {
@@ -767,7 +782,7 @@ try {
             }
             if ($enableError) {
                 if ($null -ne $enableExitCode) {
-                    Write-Host ($m.CSReEnableExitCode -f (Format-CSExitCode $enableExitCode)) -ForegroundColor Yellow
+                    Write-Host ($m.CSReEnableExitCode -f (Format-CSToolResult $enableExitCode 'REAgentC')) -ForegroundColor Yellow
                 } else {
                     Write-Host ($m.CSReEnableFailed -f $enableError) -ForegroundColor Yellow
                 }
@@ -969,7 +984,7 @@ try {
                 Write-Host $m.CSInPlaceSourceSkipped -ForegroundColor DarkGray
             }
         } catch {
-            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+            if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
             # No other repair plan is attempted after an in-place failure.
             Write-Host ($m.CSInPlaceUnable -f $_.Exception.Message) -ForegroundColor Yellow
         }
@@ -1451,7 +1466,7 @@ try {
                 $script:CSStagingCleanupAllowed = $true
             }
         } catch {
-            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+            if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
             Write-Warning $_.Exception.Message
         }
     }
@@ -1459,9 +1474,9 @@ try {
 }
 catch {
     $script:CSRunHandled = $true
-    if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) {
-        $utility.InterruptedByUser = $true
-    } elseif ([string]$script:CSExecErrorReportedMessage -ne $_.Exception.Message) {
+    Set-PSWinKitInterruption -Utility $utility -ErrorRecord $_
+    if (-not $utility.InterruptedByUser -and
+        [string]$script:CSExecErrorReportedMessage -ne $_.Exception.Message) {
         # The execution module already displayed this exact error, with recovery advice.
         Write-Host ''
         Write-Host ('=== ' + $m.ErrorSection + ' ===') -ForegroundColor Red
@@ -1470,7 +1485,7 @@ catch {
 }
 finally {
     # Ctrl+C may bypass catch, but normally still enters finally.
-    if (-not $script:CSRunHandled) { $utility.InterruptedByUser = $true }
+    Set-PSWinKitInterruption -Utility $utility -BypassedCatch:(-not $script:CSRunHandled)
     try {
         # Capture and show the existing Stage-* folders before deletion.
         # This is deliberately at the end, both for successful and failed runs.
@@ -1481,7 +1496,7 @@ finally {
             Show-CSExistingStages -OmitTrailingNewline:([bool]$utility.InterruptedByUser)
             $stageReportSucceeded = $true
         } catch {
-            Write-Warning $_.Exception.Message
+            if (-not $utility.InterruptedByUser) { Write-Warning $_.Exception.Message }
         }
         if ($stageReportSucceeded -and $script:CSStagingCleanupAllowed -and
             -not $utility.InterruptedByUser) {
@@ -1489,7 +1504,7 @@ finally {
                 Invoke-CSCleanupStaging
                 $script:CSStagingCleanedSuccessfully = $true
             } catch {
-                if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
                 Write-Warning $_.Exception.Message
             }
         }
@@ -1497,8 +1512,15 @@ finally {
             try { Show-CSPreservedStages }
             catch { Write-Warning $_.Exception.Message }
         }
-        # ISO staging may contain WinRE rescue material after a failed disk change.
-        Clear-CSISOStage
+        # Ctrl+C must not start a catalog merge or delete a staged WinRE image.
+        # Leave any interrupted ISO staging for explicit manual review.
+        if ($utility.InterruptedByUser) {
+            if ($script:CSISOStageDir) {
+                Write-Warning ($m.CSIsoStageRetained -f $script:CSISOStageDir)
+            }
+        } else {
+            Clear-CSISOStage
+        }
     } finally {
         Stop-Utility -Utility $utility
     }

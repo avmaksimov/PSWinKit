@@ -266,6 +266,7 @@ try {
     $script:AuthzReady = $true
 }
 catch {
+    if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
     # Keep the deletion path functional if Authz initialization is unavailable.
     $script:AuthzReady = $false
     Write-Warning (T 'AuthzUnavailable')
@@ -277,6 +278,7 @@ function Test-DirectoryDeleteAccess {
     # FILE_LIST_DIRECTORY (1) + FILE_DELETE_CHILD (0x40)
     try { return [RemovePathsAuthz]::HasAccess((Convert-ToNativePath $Path), [uint32]0x41) }
     catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         # Revert to actual operations; never guess that an ACL change is necessary.
         return $true
     }
@@ -374,7 +376,7 @@ function Update-DeletionCounters {
     }
     $script:CounterLastShownStage = $script:CounterStage
     # Keep the changing line within the console width so a long path cannot wrap it.
-    try { $width = [Console]::WindowWidth - 1 } catch { $width = 0 }
+    try { $width = [Console]::WindowWidth - 1 } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; $width = 0 }
     if ($width -ge 35 -and $line.Length -gt $width) {
         $line = $line.Substring(0, $width - 3) + '...'
     }
@@ -440,13 +442,17 @@ function Repair-Access {
         $granted = $false
         Set-DeletionStage -Key 'StagePermissions' -Path $Path
         try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
-        catch { }
+        catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
+        }
         if (-not $granted) {
             Set-DeletionStage -Key 'StageOwnership' -Path $Path
-            try { & takeown.exe /F (Convert-ToNativePath $Path) /A 2>&1 | Out-Null } catch { }
+            try { & takeown.exe /F (Convert-ToNativePath $Path) /A 2>&1 | Out-Null } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
             Set-DeletionStage -Key 'StagePermissions' -Path $Path
             try { Grant-ObjectAccess -Path $Path -Directory $Directory; $granted = $true }
-            catch { }
+            catch {
+                if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
+            }
         }
         if ($granted) {
             [void]$script:ACLRepaired.Add($Path)
@@ -470,6 +476,7 @@ function Invoke-DeleteLeaf {
         # The tree has already been traversed by us. Never use -Recurse here.
         try { [IO.Directory]::Delete((Convert-ToNativePath $Path)) }
         catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             # Unlike Remove-Item -Force, Directory.Delete may reject ReadOnly directories.
             $attributes = Get-Attributes -Path $Path
             if (($attributes -band [IO.FileAttributes]::ReadOnly) -eq 0) { throw }
@@ -508,6 +515,7 @@ function Remove-SafeEntry {
     param([string]$Path)
     try { $attr = Get-Attributes -Path $Path }
     catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Add-Failure -Path $Path -Message $_.Exception.Message
         return $false
     }
@@ -526,9 +534,11 @@ function Remove-SafeEntry {
             $children = @(Get-ChildItem -LiteralPath (Convert-ToNativePath $Path) -Force -ErrorAction Stop)
         }
         catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             [void](Repair-Access -Path $Path -Directory $true)
             try { $children = @(Get-ChildItem -LiteralPath (Convert-ToNativePath $Path) -Force -ErrorAction Stop) }
             catch {
+                if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
                 Add-Failure -Path $Path -Message $_.Exception.Message
                 return $false
             }
@@ -543,6 +553,7 @@ function Remove-SafeEntry {
     # Attempt deletion even after unsuccessful access repair.
     try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
     catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         $parent = Get-ParentPath -Path $Path
         if ($link) {
             # Reparse points may be unlinked, but NEVER receive changed ACL/owner.
@@ -559,9 +570,11 @@ function Remove-SafeEntry {
         }
         try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
         catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             if (-not $link) { [void](Repair-Access -Path $Path -Directory $directory) }
             try { Invoke-DeleteLeaf -Path $Path -Directory $directory -Link $link }
             catch {
+                if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
                 Add-Failure -Path $Path -Message $_.Exception.Message
                 return $false
             }
@@ -631,6 +644,7 @@ function Invoke-Main {
             }
         }
         catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             $entry.Reason = $_.Exception.Message
         }
     }
@@ -732,6 +746,7 @@ function Invoke-Main {
             }
         }
         catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             $entry.State = 'Failed'
             $script:TargetsFailed++
             Add-Failure -Path $path -Message $_.Exception.Message
@@ -751,21 +766,36 @@ function Invoke-Main {
     $script:Phase = T 'PhaseDone'
 }
 
+$script:RemoveRunHandled = $false
 try {
     Invoke-Main
+    $script:RemoveRunHandled = $true
 }
 catch {
-    $script:MainError = $_.Exception.Message
-    $script:Result = T 'StatusError'
-    Write-Host ''
-    Write-Host $script:MainError -ForegroundColor Red
+    $script:RemoveRunHandled = $true
+    Set-PSWinKitInterruption -Utility $utility -ErrorRecord $_
+    if (-not $utility.InterruptedByUser) {
+        $script:MainError = $_.Exception.Message
+        $script:Result = T 'StatusError'
+        Write-Host ''
+        Write-Host $script:MainError -ForegroundColor Red
+    }
 }
 finally {
-    Finish-DeletionCounters
-    # Always show the available summary first, then optionally keep the window open.
-    try { Show-Summary }
-    finally {
-        if ($script:AuthzReady) { [RemovePathsAuthz]::Dispose() }
-        Stop-Utility -Utility $utility
+    # Ctrl+C may bypass catch. Summaries must distinguish cancellation from
+    # a deletion failure and must not start further deletion or ACL repairs.
+    Set-PSWinKitInterruption -Utility $utility -BypassedCatch:(-not $script:RemoveRunHandled)
+    if ($utility.InterruptedByUser) { $script:Result = T 'StatusInterrupted' }
+    # Always dispose Authz and call Stop-Utility even if the output pipeline
+    # was interrupted while closing the counter or printing the summary.
+    try {
+        Finish-DeletionCounters
+        Show-Summary
+    } finally {
+        try {
+            if ($script:AuthzReady) { [RemovePathsAuthz]::Dispose() }
+        } finally {
+            Stop-Utility -Utility $utility
+        }
     }
 }

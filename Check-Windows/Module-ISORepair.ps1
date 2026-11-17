@@ -10,7 +10,7 @@ function Get-RepairHistoryCandidates {
     if ($null -eq $OsProfile) { return @() }
     $records = @(Get-PSWinKitImageCatalogEntries)
     $build = 0
-    try { $build = ([version]$OsProfile.Version).Build } catch { return @() }
+    try { $build = ([version]$OsProfile.Version).Build } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; return @() }
     $matches = New-Object 'System.Collections.Generic.List[object]'
     foreach ($record in $records) {
         if ($record.host -and [string]$record.host -ine $env:COMPUTERNAME) { continue }
@@ -20,7 +20,7 @@ function Get-RepairHistoryCandidates {
             if ($file.PSIsContainer -or [int64]$file.Length -ne [int64]$record.fileSize -or
                 $file.LastWriteTimeUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture) -cne
                 [string]$record.lastWriteUtc) { continue }
-        } catch { continue }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; continue }
         $compatible = @($record.indexes | Where-Object {
             [string]$_.editionId -ieq [string]$OsProfile.Edition -and
             [string]$_.architecture -ieq [string]$OsProfile.Architecture -and
@@ -59,6 +59,7 @@ function Get-RepairImageFromCatalog {
         Write-Host ($script:RepairMessages.ISOHistoryUsing -f $path) -ForegroundColor Green
         return [string]$selected.Source
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Write-Host ($script:RepairMessages.ISOHistoryUnavailable -f $path, $_.Exception.Message) -ForegroundColor Yellow
         return $null
     }
@@ -82,7 +83,7 @@ function Save-RepairISOHistory {
     $source = Get-RepairISOOrigin -ImagePath $ImagePath
     if (-not $source -or -not [IO.File]::Exists($source)) { return }
     $build = 0
-    try { $build = ([version]$Details.Version).Build } catch { return }
+    try { $build = ([version]$Details.Version).Build } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; return }
     if ($build -le 0 -or -not $Details.Edition -or -not $Details.Architecture) { return }
     $metadata = [pscustomobject]@{
         index = $ImageIndex; name = [string]$Details.Name
@@ -98,6 +99,7 @@ function Save-RepairISOHistory {
         Write-Host ($script:RepairMessages.ISOHistorySaved -f
             (Join-Path (Get-PSWinKitImageCatalogDirectory) 'images.json')) -ForegroundColor DarkGray
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Write-Host ($script:RepairMessages.ISOHistorySaveFailed -f $_.Exception.Message) -ForegroundColor Yellow
     }
 }
@@ -135,7 +137,7 @@ function Invoke-RepairFromSplitWim {
             $ImagePath, $ImageIndex, $pattern, $wim
         $code = Invoke-RepairExecutable -Executable $script:DismExe -Arguments $exportArguments
         if ($code -ne 0 -or -not [IO.File]::Exists($wim)) {
-            Write-Host ($script:RepairMessages.SWMExportFailed -f (Format-ExitCode $code)) -ForegroundColor Red
+            Write-Host ($script:RepairMessages.SWMExportFailed -f (Format-RepairToolResult -Code $code -Dism)) -ForegroundColor Red
             return $code
         }
         $actual = Get-ImageDetails -ImagePath $wim -ImageIndex 1
@@ -150,6 +152,7 @@ function Invoke-RepairFromSplitWim {
     } catch [System.Management.Automation.PipelineStoppedException] {
         throw
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Write-Host ($script:RepairMessages.SWMExportFailed -f $_.Exception.Message) -ForegroundColor Red
         return 1
     } finally {
@@ -161,6 +164,7 @@ function Invoke-RepairFromSplitWim {
             }
             Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop
         } catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             Write-Host ($script:RepairMessages.SWMCleanupFailed -f $stage, $_.Exception.Message) -ForegroundColor Yellow
         }
     }

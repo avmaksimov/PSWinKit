@@ -184,8 +184,8 @@ function Assert-CSBitLockerOff {
             -ErrorAction Stop
         if ([uint32]$conversion.ReturnValue -ne 0 -or
             [uint32]$protection.ReturnValue -ne 0) {
-            throw ($m.CSBitLockerWmiMethodsFailed -f (Format-CSExitCode $conversion.ReturnValue),
-                (Format-CSExitCode $protection.ReturnValue))
+            throw ($m.CSBitLockerWmiMethodsFailed -f (Format-PSWinKitErrorCode -Code $conversion.ReturnValue -Messages $utility.CommonMessages),
+                (Format-PSWinKitErrorCode -Code $protection.ReturnValue -Messages $utility.CommonMessages))
         }
         # 0/0 is the only acceptable state: fully decrypted, protection off.
         # Protection off alone is not proof that the volume is decrypted.
@@ -574,7 +574,7 @@ function Find-CSLocalWinREImage {
             Assert-CSWim $path
             return [string]$path
         } catch {
-            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+            if ((Test-PSWinKitInterruption -ErrorRecord $_)) { throw }
             Write-Host ($m.CSIsoLocalInvalid -f $path) -ForegroundColor Yellow
         }
     }
@@ -813,7 +813,7 @@ function Test-CSWindowsFilesystemBeforeResize($disk, $c, $snapshot) {
                 Write-Host $m.CSFsChkdskClean -ForegroundColor Green
             } else {
                 $detail = (@($fallbackOutput | Select-Object -Last 4) -join ' ').Trim()
-                Write-Host ($m.CSFsChkdskFailed -f (Format-CSExitCode $fallbackCode), $detail) -ForegroundColor Yellow
+                Write-Host ($m.CSFsChkdskFailed -f (Format-CSToolResult $fallbackCode 'CHKDSK'), $detail) -ForegroundColor Yellow
             }
         } catch {
             Write-Host ($m.CSFsChkdskException -f $_.Exception.Message) -ForegroundColor Yellow
@@ -1024,7 +1024,7 @@ function Set-CSRecoveryType($disk, $partNumber) {
 
 function Invoke-CSExternal([string]$file, [string[]]$arguments) {
     & $file @arguments
-    if ($LASTEXITCODE -ne 0) { throw ($m.CSExecExternalFailed -f $file, (Format-CSExitCode $LASTEXITCODE)) }
+    if ($LASTEXITCODE -ne 0) { throw ($m.CSExecExternalFailed -f $file, (Format-CSToolResult $LASTEXITCODE 'External')) }
 }
 
 function Invoke-CSCRecoveryExecution {
@@ -1740,7 +1740,7 @@ function Get-CSInPlaceWimTarget([string]$root) {
             Assert-CSWim $wim
             throw $m.CSInPlaceAlreadyValid
         } catch {
-            if ($_.Exception -is [System.Management.Automation.PipelineStoppedException] -or
+            if ((Test-PSWinKitInterruption -ErrorRecord $_) -or
                 $_.Exception.Message -eq $m.CSInPlaceAlreadyValid) { throw }
         }
         $item = Get-Item -LiteralPath $wim -Force -ErrorAction Stop

@@ -26,6 +26,11 @@ $script:VolumeStatus = $script:RepairMessages.NotChecked
 $script:VolumeChecks = @()
 $script:VolumeNeedsAttention = $false
 $script:VolumeScheduled = $false
+$script:ChkdskDescriptions = @{
+    '0x00000001' = $script:RepairMessages.CHKDSKExitFixed
+    '0x00000002' = $script:RepairMessages.CHKDSKExitCleanup
+    '0x00000003' = $script:RepairMessages.CHKDSKExitNotFixed
+}
 $script:RestartRequested = $false
 $script:RestartInitiated = $false
 $script:HadError = $false
@@ -45,20 +50,18 @@ $script:SfcExe = Join-Path $script:ProgramDirectory 'sfc.exe'
 $script:ChkdskExe = Join-Path $script:ProgramDirectory 'chkdsk.exe'
 $script:ChkntfsExe = Join-Path $script:ProgramDirectory 'chkntfs.exe'
 
-function Format-ExitCode {
-    param([int]$Code)
-    # Preserve the exact 32-bit exit code without an unnecessary decimal copy.
-    return ('0x{0:X8}' -f ([BitConverter]::ToUInt32([BitConverter]::GetBytes($Code), 0)))
-}
-
 function Format-RepairToolResult {
     param([int]$Code, [switch]$Dism)
-    if ($Code -eq 0) { return 'OK' }
-    $hexCode = Format-ExitCode $Code
-    if ($Dism -and $Code -eq 3010) {
-        return ($script:RepairMessages.ToolResultRestartRequired -f $hexCode)
+    $known = @{}
+    if ($Dism) {
+        $known = @{
+            '0x800F081F' = $script:RepairMessages.DISMSourceMissing
+            '0x800F0906' = $script:RepairMessages.DISMDownloadFailure
+            '0x800F0915' = $script:RepairMessages.DISMSourceIncomplete
+        }
     }
-    return ($script:RepairMessages.ToolResultError -f $hexCode)
+    return (Format-PSWinKitToolResult -Code $Code -Messages $utility.CommonMessages `
+        -ToolDescriptions $known -RestartRequired:($Dism -and $Code -eq 3010))
 }
 
 function Find-ImageAtPath {
@@ -91,6 +94,7 @@ function Find-ImagesOnDrives {
             Where-Object { @('2','3','4','5') -contains ([string]$_.DriveType) } |
             Sort-Object DeviceID)
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         $drives = @()
         foreach ($disk in [IO.DriveInfo]::GetDrives()) {
             if ($disk.DriveType -ne [IO.DriveType]::Unknown) {
@@ -103,7 +107,7 @@ function Find-ImagesOnDrives {
         if ($root -notmatch '^[A-Za-z]:$') { continue }
         $checked += $root
         $file = $null
-        try { $file = Find-ImageAtPath $root } catch { }
+        try { $file = Find-ImageAtPath $root } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
         if (($file -ne $null) -and (-not ($found -contains $file))) { $found += $file }
     }
     Write-Host ($script:RepairMessages.CheckedDrives + $(if ($checked.Count -gt 0) { $checked -join ', ' } else { $script:RepairMessages.UnableToListDrives }))
@@ -152,7 +156,7 @@ function Choose-Image {
     while ($true) {
         $raw = (Read-Host $script:RepairMessages.DriveLetter).Trim()
         if ($raw.Length -eq 0) { return $null }
-        try { $file = Find-ImageAtPath $raw } catch { $file = $null }
+        try { $file = Find-ImageAtPath $raw } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; $file = $null }
         if ($file -ne $null) {
             Write-Host ($script:RepairMessages.FoundImage + $file) -ForegroundColor Green
             return $file
@@ -175,11 +179,11 @@ function Get-OsImageProfile {
     if ($IsServer) {
         try {
             $installation = [string](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).InstallationType
-        } catch { $installation = '' }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; $installation = '' }
     }
     # Get-UICulture is advisory for the default image language, not a guarantee of OS integrity.
     $lang = ''
-    try { $lang = [string](Get-UICulture).Name } catch { }
+    try { $lang = [string](Get-UICulture).Name } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
     $osFamily = ''
     $name = [string]$OperatingSystem.Caption
     $familyMatch = [regex]::Match($name, '(?i)Windows Server\s+\d{4}(?:\s+R2)?|Windows\s+(?:11|10|8\.1|8|7)')
@@ -242,7 +246,7 @@ function Choose-ImageIndex {
     $code = [int]$LASTEXITCODE
     if ($code -ne 0) {
         foreach ($line in $rawLines) { Write-Host ([string]$line) }
-        Write-Host ($script:RepairMessages.CouldNotReadImage + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.CouldNotReadImage + (Format-RepairToolResult -Code $code -Dism)) -ForegroundColor Red
         return $null
     }
     $images = @()
@@ -353,7 +357,7 @@ function Invoke-RepairExecutable {
                     $process.Kill()
                     $process.WaitForExit(3000) | Out-Null
                 }
-            } catch { }
+            } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
             $process.Dispose()
         }
     }
@@ -414,7 +418,7 @@ function Schedule-SystemVolumeCheck {
         $script:VolumeStatus = 'ScheduledAtBoot'
         Write-Host $script:RepairMessages.RepairScheduledForThe -ForegroundColor Yellow
     } else {
-        Write-Host ($script:RepairMessages.ChkntfsError + (Format-ExitCode $code)) -ForegroundColor Red
+        Write-Host ($script:RepairMessages.ChkntfsError + (Format-RepairToolResult -Code $code)) -ForegroundColor Red
     }
 }
 
@@ -438,7 +442,7 @@ function Get-WindowsRelease {
     try {
         $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
         return ([string]$cv.DisplayVersion).Trim()
-    } catch { return '' }
+    } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; return '' }
 }
 
 # Inspect fixed local volumes hosting Windows folders and the ORIGINAL user's
@@ -494,7 +498,7 @@ function Get-RepairVolumes {
         foreach ($disk in @(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType = 3' -ErrorAction Stop)) {
             $fixed[([string]$disk.DeviceID).ToUpperInvariant()] = $true
         }
-    } catch { }
+    } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
     if ($fixed.Count -eq 0) {
         try {
             foreach ($disk in [IO.DriveInfo]::GetDrives()) {
@@ -502,7 +506,7 @@ function Get-RepairVolumes {
                     $fixed[$disk.Name.Substring(0, 2).ToUpperInvariant()] = $true
                 }
             }
-        } catch { }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
     }
     if ($fixed.Count -eq 0) {
         Write-Warning $script:RepairMessages.FixedDriveListUnavailable
@@ -595,6 +599,7 @@ function Test-SystemVolume {
                         } catch [System.Management.Automation.PipelineStoppedException] {
                             throw
                         } catch {
+                            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
                             Write-Host ($script:RepairMessages.OnlineRepairDidNot + $_.Exception.Message) -ForegroundColor Red
                         }
                     }
@@ -605,9 +610,11 @@ function Test-SystemVolume {
             } catch [System.Management.Automation.PipelineStoppedException] {
                 throw
             } catch {
+                if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
                 $errorText = [string]$_.Exception.Message
                 if ([string]::IsNullOrWhiteSpace($errorText)) {
-                    $errorText = Format-ExitCode ([int]$_.Exception.HResult)
+                    $errorText = Format-PSWinKitErrorCode -Code ([long]$_.Exception.HResult) `
+                        -Messages $utility.CommonMessages
                 }
                 Write-Host ($script:RepairMessages.CouldNotCheckThe + $errorText) -ForegroundColor Red
                 Write-Host $script:RepairMessages.SwitchingToReadOnly -ForegroundColor Yellow
@@ -620,13 +627,15 @@ function Test-SystemVolume {
     }
     # Read-only fallback: neither /f nor /r is used automatically.
     $code = Invoke-RepairExecutable -Executable $script:ChkdskExe -Arguments $drive
-    $script:VolumeStatus = ('CHKDSK ' + (Format-ExitCode $code))
+    $chkdskStatus = Format-PSWinKitErrorCode -Code $code `
+        -Messages $utility.CommonMessages -ToolDescriptions $script:ChkdskDescriptions
+    $script:VolumeStatus = ('CHKDSK ' + $chkdskStatus)
     if ($code -eq 0) {
         Write-Host $script:RepairMessages.CHKDSKNoErrorsFound -ForegroundColor Green
         return
     }
     $script:VolumeNeedsAttention = $true
-    Write-Host ('CHKDSK: ' + (Format-ExitCode $code)) -ForegroundColor Red
+    Write-Host ('CHKDSK: ' + $chkdskStatus) -ForegroundColor Red
     Write-Host $script:RepairMessages.TheFileSystemMay
     Schedule-SystemVolumeCheck -Drive $drive
 }
@@ -699,6 +708,7 @@ function Offer-InPlaceWindowsSetup {
             return
         }
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Write-Host $script:RepairMessages.CouldNotReliablyCompare -ForegroundColor Yellow
         return
     }
@@ -746,6 +756,7 @@ function Offer-InPlaceWindowsSetup {
     } catch [System.Management.Automation.PipelineStoppedException] {
         throw
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         $script:HadError = $true
         Write-Host ($script:RepairMessages.CouldNotStartWindows + $_.Exception.Message) -ForegroundColor Red
     }
@@ -787,6 +798,7 @@ function Try-RepairFromImage {
     return (Run-Dism -ImagePath $image -ImageIndex $index)
 }
 
+$script:RepairRunHandled = $false
 try {
 
     try {
@@ -796,6 +808,7 @@ try {
         $script:TranscriptOn = $true
         Write-Host ($script:RepairMessages.RepairWindowsLogStarted + $script:LogPath)
     } catch {
+        if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
         Write-Host ($script:RepairMessages.CouldNotStartThe + $_.Exception.Message) -ForegroundColor Yellow
     }
     Write-Host ''
@@ -805,7 +818,7 @@ try {
     $isServer = ([int]$os.ProductType -ne 1)
     $canRestoreHealth = ($version.Major -gt 6) -or (($version.Major -eq 6) -and ($version.Minor -ge 2))
     $edition = ''
-    try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
+    try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
     $profile = Get-OsImageProfile -OperatingSystem $os -Edition $edition -IsServer $isServer
 
     $release = Get-WindowsRelease
@@ -961,24 +974,31 @@ try {
         } catch [System.Management.Automation.PipelineStoppedException] {
             throw
         } catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             Write-Host ($script:RepairMessages.CouldNotRestartThe + $_.Exception.Message) -ForegroundColor Red
             $script:HadError = $true
         }
     }
+    $script:RepairRunHandled = $true
 } catch {
-    # All unexpected failures, including cancellation, end the complete script.
-    Write-Host ($script:RepairMessages.RepairWindowsError + $_.Exception.Message) -ForegroundColor Red
-    throw
+    $script:RepairRunHandled = $true
+    Set-PSWinKitInterruption -Utility $utility -ErrorRecord $_
+    if (-not $utility.InterruptedByUser) {
+        Write-Host ($script:RepairMessages.RepairWindowsError + $_.Exception.Message) -ForegroundColor Red
+        $script:HadError = $true
+    }
 } finally {
-    # Never start a repair operation from finally: only cleanup belongs here.
+    # Ctrl+C can bypass catch in Windows PowerShell 5.1. Do not treat a normal
+    # error caught above as a cancellation, and never start repairs in finally.
+    Set-PSWinKitInterruption -Utility $utility -BypassedCatch:(-not $script:RepairRunHandled)
     if ($script:TranscriptOn) {
         try { Stop-Transcript | Out-Null } catch { }
     }
-    if ($script:RepairCatalogTouched) {
+    if ($script:RepairCatalogTouched -and -not $utility.InterruptedByUser) {
         try { Merge-PSWinKitImageCatalog }
         catch { Write-Host ($script:RepairMessages.ISOHistoryMergeFailed -f $_.Exception.Message) -ForegroundColor Yellow }
     }
     if ($script:RestartInitiated) { $utility.PauseOnExit = $false }
     Stop-Utility -Utility $utility
 }
-if ($script:HadError) { exit 1 } else { exit 0 }
+if ($script:HadError -or $utility.InterruptedByUser) { exit 1 } else { exit 0 }

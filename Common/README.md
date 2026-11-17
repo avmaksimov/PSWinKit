@@ -88,14 +88,14 @@ Explicitly supplied values of `String`, `Boolean`, `SwitchParameter`, ordinary n
 
 ## 5. Public functions
 
-Common exposes **two public functions**:
+Common provides two lifecycle functions:
 
 | Function | Purpose |
 | --- | --- |
 | `Start-Utility` | Launch parameters, language, optional UAC, header and start time |
 | `Stop-Utility` | Finish time, overall duration and final pause |
 
-Internal helpers are allowed but must not become a required public API. A separate `Get-UtilityMessage` function is unnecessary: utility translations are accessed via `$utility.Messages`.
+Utilities also use the shared interruption helpers `Test-PSWinKitInterruption`, `Set-PSWinKitInterruption` and code formatters `Format-PSWinKitExitCode`, `Format-PSWinKitErrorCode`, `Format-PSWinKitToolResult`. Do not duplicate these in individual utility folders. Unknown codes retain their exact `0xXXXXXXXX` values; never guess their meanings from another program's code table. Program-specific descriptions belong to the corresponding utility and its language keys, not to `Common`. A separate `Get-UtilityMessage` function is unnecessary: utility translations are available as `$utility.Messages`.
 
 ## 6. Start-Utility
 
@@ -185,7 +185,7 @@ Duration: 00:00:33
 
 Date/time and duration follow section 9. The word “Finished” is neutral; it does not assert that every action succeeded. Results, errors and numeric statistics are emitted by the utility itself **before** calling `Stop-Utility`. A final keypress prompt follows these lines only when `$utility.PauseOnExit` is true. `Stop-Utility` reads a keyboard key (falling back to Enter only when raw key input is unavailable). Common does not print an additional summary.
 
-**User interruption.** The internal `$utility.InterruptedByUser` flag defaults to `$false`. Utilities that detect Ctrl+C (for example a `PipelineStoppedException`, or entry into `finally` without completing the guarded operation or its error handler) set it to `$true` before calling `Stop-Utility`. Common then prints its localized **Interrupted by user** message **before** the finished time and duration. It uses direct console error output as a best-effort fallback when PowerShell has already stopped its output pipeline. It does not intercept, suppress or change Ctrl+C behavior, and should not mislabel ordinary failures as user interruptions. Existing utilities may migrate to this shared notice individually.
+**User interruption.** `$utility.InterruptedByUser` is initially `$false`. In `catch`, call `Set-PSWinKitInterruption -Utility $utility -ErrorRecord $_` and report an ordinary failure only if the interruption was not confirmed. In `finally`, call `Set-PSWinKitInterruption -Utility $utility -BypassedCatch:(-not $handled)`, with `$handled` set on normal completion and when an error was processed by `catch`. This detects Ctrl+C even when it bypasses `catch`. Only safe cleanup and `Stop-Utility` belong in `finally`. Common prints the localized interruption notice before the finish time and duration, attempting direct console output when the pipeline has stopped. Never launch additional diagnostic or modifying commands after interruption. Forced process termination cannot guarantee `finally`.
 
 Call `Stop-Utility` only after a successful `Start-Utility`, preferably in `finally`. Ctrl+C may bypass `catch` but normally unwinds through `finally`; Windows PowerShell may still suppress output during cancellation, and forcibly killing the process cannot guarantee execution.
 

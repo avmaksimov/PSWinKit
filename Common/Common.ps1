@@ -266,6 +266,116 @@ function Test-PSWinKitSimpleValue {
     return $false
 }
 
+# Shared Ctrl+C recognition. A PowerShell pipeline stop may bypass catch,
+# but finally still runs. The caller must distinguish a bypassed catch from
+# an ordinary error so a failed command is never reported as user cancellation.
+function Test-PSWinKitInterruption {
+    param([AllowNull()][object]$ErrorRecord)
+    if ($null -eq $ErrorRecord) { return $false }
+    $exception = if ($ErrorRecord -is [Management.Automation.ErrorRecord]) {
+        $ErrorRecord.Exception
+    } elseif ($ErrorRecord -is [Exception]) { $ErrorRecord } else { $null }
+    while ($null -ne $exception) {
+        if ($exception -is [Management.Automation.PipelineStoppedException]) { return $true }
+        $exception = $exception.InnerException
+    }
+    return $false
+}
+
+function Set-PSWinKitInterruption {
+    param(
+        [Parameter(Mandatory = $true)][object]$Utility,
+        [AllowNull()][object]$ErrorRecord = $null,
+        [switch]$BypassedCatch
+    )
+    if ($BypassedCatch -or (Test-PSWinKitInterruption -ErrorRecord $ErrorRecord)) {
+        $Utility.InterruptedByUser = $true
+    }
+}
+
+# Native exit codes may be signed HRESULTs or unsigned Win32 values.
+# Convert without losing any bits. The caller, not this function, decides
+# whether a nonzero code means failure, warning, or reboot required.
+function Format-PSWinKitExitCode {
+    param([Parameter(Mandatory = $true)][long]$Code)
+    return ('0x{0:X8}' -f ($Code -band [long]4294967295))
+}
+
+# Program-specific descriptions win over generic Windows descriptions.
+# Raw positive native codes are NOT automatically treated as Win32 errors:
+# different tools assign different meanings to the same number.
+function Get-PSWinKitExitCodeDescription {
+    param(
+        [Parameter(Mandatory = $true)][long]$Code,
+        [Parameter(Mandatory = $true)][hashtable]$Messages,
+        [hashtable]$ToolDescriptions = @{},
+        [switch]$IsWin32Code
+    )
+    $hex = Format-PSWinKitExitCode -Code $Code
+    if ($null -ne $ToolDescriptions -and $ToolDescriptions.ContainsKey($hex)) {
+        return [string]$ToolDescriptions[$hex]
+    }
+    $unsigned = $Code -band [long]4294967295
+    $win32 = $null
+    if (($unsigned -band [long]4294901760) -eq [long]2147942400) {
+        # HRESULT_FROM_WIN32: 0x8007xxxx.
+        $win32 = [int]($unsigned -band [long]65535)
+    } elseif ($IsWin32Code -and $unsigned -le 65535) {
+        $win32 = [int]$unsigned
+    }
+    if ($null -ne $win32) {
+        $known = @{
+            2 = 'NativeFileNotFound'
+            3 = 'NativePathNotFound'
+            5 = 'NativeAccessDenied'
+            32 = 'NativeSharingViolation'
+            87 = 'NativeInvalidParameter'
+            112 = 'NativeDiskFull'
+            995 = 'NativeOperationAborted'
+            1223 = 'NativeOperationCancelled'
+        }
+        if ($known.ContainsKey($win32) -and $Messages.ContainsKey($known[$win32])) {
+            return [string]$Messages[$known[$win32]]
+        }
+    }
+    return ''
+}
+
+# For an existing text like "command failed: {0}", where {0} is the error.
+function Format-PSWinKitErrorCode {
+    param(
+        [Parameter(Mandatory = $true)][long]$Code,
+        [Parameter(Mandatory = $true)][hashtable]$Messages,
+        [hashtable]$ToolDescriptions = @{},
+        [switch]$IsWin32Code
+    )
+    $hex = Format-PSWinKitExitCode -Code $Code
+    $detail = Get-PSWinKitExitCodeDescription -Code $Code -Messages $Messages `
+        -ToolDescriptions $ToolDescriptions -IsWin32Code:$IsWin32Code
+    if ($detail) { return ('{0} ({1})' -f $detail, $hex) }
+    return $hex
+}
+
+# A complete user-visible status; reserve parentheses for the hex code.
+function Format-PSWinKitToolResult {
+    param(
+        [Parameter(Mandatory = $true)][long]$Code,
+        [Parameter(Mandatory = $true)][hashtable]$Messages,
+        [hashtable]$ToolDescriptions = @{},
+        [switch]$RestartRequired,
+        [switch]$IsWin32Code
+    )
+    if ($Code -eq 0) { return [string]$Messages.NativeResultOK }
+    $hex = Format-PSWinKitExitCode -Code $Code
+    if ($RestartRequired) {
+        return ('{0} ({1})' -f [string]$Messages.NativeResultRestartRequired, $hex)
+    }
+    $detail = Get-PSWinKitExitCodeDescription -Code $Code -Messages $Messages `
+        -ToolDescriptions $ToolDescriptions -IsWin32Code:$IsWin32Code
+    if ($detail) { return ('{0}: {1} ({2})' -f [string]$Messages.NativeResultError, $detail, $hex) }
+    return ('{0} ({1})' -f [string]$Messages.NativeResultError, $hex)
+}
+
 function Test-PSWinKitUacCancelled {
     param([Exception]$Exception)
     while ($null -ne $Exception) {

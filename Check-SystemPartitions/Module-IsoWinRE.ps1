@@ -231,7 +231,7 @@ function Resolve-CSUserInstallationSource([string]$inputText) {
     if ($entry -match '^[A-Za-z]:?$') { $entry = $entry[0] + ':\' }
     try {
         $resolved = (Resolve-Path -LiteralPath $entry -ErrorAction Stop).ProviderPath
-    } catch { throw ($m.CSIsoInvalidPath -f $inputText) }
+    } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; throw ($m.CSIsoInvalidPath -f $inputText) }
     if ([IO.File]::Exists($resolved)) {
         if ([IO.Path]::GetExtension($resolved) -ine '.iso') {
             throw ($m.CSIsoInvalidPath -f $inputText)
@@ -256,7 +256,7 @@ function Get-CSSelectedInstallationSource {
     # 1. Saved ISO files from the shared Data catalog.
     $known = @()
     try { $known = @(Get-CSCatalogMatchingISOs) }
-    catch { Write-Warning ($m.CSIsoCatalogReadFailed -f $_.Exception.Message) }
+    catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; Write-Warning ($m.CSIsoCatalogReadFailed -f $_.Exception.Message) }
     if ($known.Count -gt 0) {
         $chosen = Select-CSCatalogOrFoundSource $known $m.CSIsoKnownSources
         if ($null -eq $chosen) { return $null }
@@ -266,7 +266,7 @@ function Get-CSSelectedInstallationSource {
             $mountedIndex = Select-CSISOImageIndex $mountedSource.Source
             $mountedSource | Add-Member -NotePropertyName VerifiedIndex -NotePropertyValue $mountedIndex
             return $mountedSource
-        } catch { Write-Warning ($m.CSIsoKnownInvalid -f $_.Exception.Message) }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; Write-Warning ($m.CSIsoKnownInvalid -f $_.Exception.Message) }
     }
 
     # 2. Already mounted installation media (including hypervisor virtual DVDs).
@@ -281,7 +281,7 @@ function Get-CSSelectedInstallationSource {
                 ISOPath = (Get-PSWinKitMountedISOOrigin ([string]$selected.Letter))
                 VerifiedIndex = [int]$mountedIndex
             }
-        } catch { Write-Warning ($m.CSIsoMountedMismatch -f $_.Exception.Message) }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; Write-Warning ($m.CSIsoMountedMismatch -f $_.Exception.Message) }
     }
 
     # 3. User-provided drive, folder, ISO, UNC or relative path.
@@ -294,7 +294,7 @@ function Get-CSSelectedInstallationSource {
 function Get-CSMountedInstallationImages {
     $images = New-Object 'System.Collections.Generic.List[object]'
     try { $drives = @(Get-CimInstance Win32_CDROMDrive -ErrorAction Stop) }
-    catch { return @() }
+    catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; return @() }
     foreach ($drive in $drives) {
         $letter = ([string]$drive.Drive).Trim().TrimEnd(':').ToUpperInvariant()
         if ($letter -notmatch '^[A-Z]$') { continue }
@@ -305,7 +305,7 @@ function Get-CSMountedInstallationImages {
         if ($origin) { $label = [IO.Path]::GetFileName($origin) }
         if (-not $label) {
             try { $label = [string](Get-Volume -DriveLetter ([char]$letter) -ErrorAction Stop).FileSystemLabel }
-            catch { }
+            catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw } }
         }
         if (-not $label) { $label = [string]$drive.Name }
         $images.Add([pscustomobject]@{ Letter=$letter; Name=$label; Source=$source })
@@ -341,7 +341,7 @@ function Get-CSISOImage {
         try {
             Add-PSWinKitImageCatalogISO $isoPath @($script:CSISOSelectedCatalogMetadata)
             Write-Host ($m.CSIsoCatalogSavedPath -f $catalogFile) -ForegroundColor DarkGray
-        } catch { Write-Warning ($m.CSIsoCatalogSaveFailed -f $_.Exception.Message) }
+        } catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; Write-Warning ($m.CSIsoCatalogSaveFailed -f $_.Exception.Message) }
     } else {
         Write-Host ($m.CSIsoCatalogNotSavedPath -f $catalogFile) -ForegroundColor DarkGray
     }
@@ -364,9 +364,11 @@ function Get-CSISOImage {
         Write-Host $m.CSIsoTrying7Zip -ForegroundColor DarkGray
         try {
             & $zip 'e' $source $entry ("-o$wimDirectory") '-y' | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', (Format-CSExitCode $LASTEXITCODE)) }
+            if ($LASTEXITCODE -eq 255) { $utility.InterruptedByUser = $true }
+            if ($LASTEXITCODE -ne 0) { throw ($m.CSIsoExternalFailed -f '7-Zip', (Format-CSToolResult $LASTEXITCODE '7-Zip')) }
             Assert-CSWim $destination
         } catch {
+            if ((Test-PSWinKitInterruption -ErrorRecord $_) -or $utility.InterruptedByUser) { throw }
             Write-Host ($m.CSIso7ZipFallback -f $_.Exception.Message) -ForegroundColor Yellow
             if ([IO.File]::Exists($destination)) { Remove-Item -LiteralPath $destination -Force -ErrorAction Stop }
         }
@@ -419,7 +421,7 @@ function Get-CSISOImage {
 function Clear-CSISOStage {
     # Publication is already complete; merge fragments before staging cleanup.
     try { Merge-PSWinKitImageCatalog }
-    catch { Write-Warning ($m.CSIsoCatalogMergeFailed -f $_.Exception.Message) }
+    catch { if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }; Write-Warning ($m.CSIsoCatalogMergeFailed -f $_.Exception.Message) }
     if (-not $script:CSISOStageDir) { return }
     if ($script:CSISOMounted -or ($script:CSExecMutated -and -not $script:CSExecLastSucceeded)) {
         Write-Warning ($m.CSIsoStageRetained -f $script:CSISOStageDir)
@@ -432,6 +434,7 @@ function Clear-CSISOStage {
             }
             Remove-Item -LiteralPath $script:CSISOStageDir -Recurse -Force -ErrorAction Stop
         } catch {
+            if (Test-PSWinKitInterruption -ErrorRecord $_) { throw }
             Write-Warning ($m.CSIsoCleanupFailed -f $script:CSISOStageDir, $_.Exception.Message)
         }
     }
