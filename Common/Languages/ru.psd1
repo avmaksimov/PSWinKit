@@ -317,7 +317,7 @@
     }
 
 
-    'Check-SystemPartitions' = @{
+    'Check-WinRE' = @{
         CSCleanupUnsafeRoot = 'Небезопасное содержимое временного каталога; автоматическое удаление отменено.'
         CSInactiveRecoveryRole = 'Recovery — WinRE отключена'
         CSInactiveRecoveryRecommendation = 'Зарегистрировать WinRE без изменения разделов'
@@ -455,7 +455,7 @@
         CSNotResizeGuarantee        = 'Это оценка геометрии, а не проверенный предел расширения C: и не утверждённый план исправления.'
         CSNoExecution               = 'Просмотр завершён. Разделы диска и параметры WinRE не изменялись.'
 
-        Title = 'Check-SystemPartitions'
+        Title = 'Check-WinRE'
         InterruptedNotice = 'ПРЕРВАНО: Ctrl+C остановил выполнение до завершения.'
         InterruptedWarning = 'Перед повторным запуском проверьте состояние WinRE и диска; откат не выполняется.'
         InterruptedHeading = '=== ОПЕРАЦИЯ ПРЕРВАНА ==='
@@ -589,7 +589,7 @@
         DiskMayHaveChanged = 'Диск мог измениться. Перед повторным запуском проверьте его разметку.'
         Diagnostics = '  Диагностика: Get-Partition; reagentc /info'
         MountRetained = 'Папка подключения намеренно сохранена, чтобы не удалить файлы Recovery.'
-        Failed = 'Check-SystemPartitions завершилась с ошибкой; см. сообщение выше.'
+        Failed = 'Check-WinRE завершилась с ошибкой; см. сообщение выше.'
         ReInfoFailed = 'Не удалось выполнить reagentc /info: {0}'
         ReInfoParseFailed = "Не удалось определить состояние WinRE по выводу reagentc:`n{0}"
         UnsupportedArchitecture = 'Неподдерживаемая архитектура процессора: {0}.'

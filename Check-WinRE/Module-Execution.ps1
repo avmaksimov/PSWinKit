@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-# Check-SystemPartitions execution module. Loaded by Check-SystemPartitions.ps1.
+# Check-WinRE execution module. Loaded by Check-WinRE.ps1.
 # This module NEVER runs any disk changes when dot-sourced.
 # Supported execution scenario: GPT, C: NTFS, active WinRE Recovery directly after C:.
 

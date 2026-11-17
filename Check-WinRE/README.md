@@ -1,8 +1,8 @@
-﻿# Check-SystemPartitions
+﻿# Check-WinRE
 
 **English** | [Русский](README.ru.md)
 
-**Check-SystemPartitions** diagnoses and repairs the Windows Recovery Environment (WinRE), checks the system disk layout, and offers optional C:/Recovery optimization and carefully audited deletion of obsolete partitions.
+**Check-WinRE** diagnoses and repairs the Windows Recovery Environment (WinRE), checks the system disk layout, and offers optional C:/Recovery optimization and carefully audited deletion of obsolete partitions.
 
 ## Features
 
@@ -30,7 +30,7 @@ The target is based on the actual NTFS volume capacity, not just partition geome
 From the PSWinKit root in Windows PowerShell 5.1:
 
 ```powershell
-.\Check-SystemPartitions\Check-SystemPartitions.ps1
+.\Check-WinRE\Check-WinRE.ps1
 ```
 
 No required parameters. The interactive workflow is: diagnose and show the current partition table → select operations → preview the proposed layout in the same table format → validate → confirm → execute → verify and optionally clean up an obsolete Recovery (GPT only after a separate audit). If no changes are needed, the tool exits without repartitioning.
@@ -39,7 +39,7 @@ No required parameters. The interactive workflow is: diagnose and show the curre
 
 | File | Responsibility |
 |---|---|
-| `Check-SystemPartitions.ps1` | Entry point, disk diagnostics, physical partition table, workflow selection, confirmations, and final results. |
+| `Check-WinRE.ps1` | Entry point, disk diagnostics, physical partition table, workflow selection, confirmations, and final results. |
 | `Module-Planning.ps1` | **Read-only** Recovery/image assessment and GPT/MBR geometry calculations, including choosing right-side expansion, rebuild after C:, or new Recovery before D:. |
 | `Module-Execution.ps1` | Safety preflight, SHA-256 checked backups, C:/Recovery changes, REAgentC registration and final verification; supports disabled WinRE both in-place and with insufficient Recovery space. |
 | `Module-IsoWinRE.ps1` | Finds known or mounted Windows ISO sources, attaches ISO files, selects an image index and extracts `Winre.wim` with 7-Zip/DISM. |
@@ -48,7 +48,7 @@ No required parameters. The interactive workflow is: diagnose and show the curre
 | `../Common/Common.ps1` | Shared launch, elevation, localization, and exit/duration handling. |
 | `../Common/Languages/en.psd1`, `ru.psd1` | English and Russian localized messages. |
 
-Only `Check-SystemPartitions.ps1` is launched directly; it loads the auxiliary modules automatically.
+Only `Check-WinRE.ps1` is launched directly; it loads the auxiliary modules automatically.
 
 ## Shared Windows ISO catalog
 

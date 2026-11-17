@@ -317,7 +317,7 @@
     }
 
 
-    'Check-SystemPartitions' = @{
+    'Check-WinRE' = @{
         CSCleanupUnsafeRoot = 'Unsafe temporary directory contents; automatic cleanup has been canceled.'
         CSInactiveRecoveryRole = 'Recovery — Windows RE disabled'
         CSInactiveRecoveryRecommendation = 'Register Windows RE without repartitioning'
@@ -455,7 +455,7 @@
         CSNotResizeGuarantee        = 'This is a geometry estimate, not a validated C: resize limit or an approved repair plan.'
         CSNoExecution               = 'Preview complete. No disk or WinRE settings were changed.'
 
-        Title = 'Check-SystemPartitions'
+        Title = 'Check-WinRE'
         InterruptedNotice = 'INTERRUPTED: Ctrl+C stopped the operation before completion.'
         InterruptedWarning = 'Check WinRE and disk state before retrying; no rollback is performed.'
         InterruptedHeading = '=== OPERATION INTERRUPTED ==='
@@ -589,7 +589,7 @@
         DiskMayHaveChanged = 'The disk may have changed. Check its layout before running again.'
         Diagnostics = '  Diagnostics: Get-Partition; reagentc /info'
         MountRetained = 'The mount directory was deliberately retained to avoid deleting Recovery files.'
-        Failed = 'Check-SystemPartitions failed; see the error above.'
+        Failed = 'Check-WinRE failed; see the error above.'
         ReInfoFailed = 'Unable to run reagentc /info: {0}'
         ReInfoParseFailed = "Unable to parse WinRE status from reagentc output:`n{0}"
         UnsupportedArchitecture = 'Unsupported processor architecture: {0}.'

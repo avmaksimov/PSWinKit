@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-# Check-SystemPartitions — interactive system partition diagnostics and repair.
+# Check-WinRE — interactive system partition diagnostics and repair.
 # GPT/NTFS modifications require per-operation selection, prechecks and final confirmation.
 # Standard PSWinKit common parameters are optional; no mode switches are needed.
 
