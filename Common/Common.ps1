@@ -356,7 +356,7 @@ function Format-PSWinKitErrorCode {
     return $hex
 }
 
-# A complete user-visible status; reserve parentheses for the hex code.
+# A complete user-visible status; parentheses are used only for described results.
 function Format-PSWinKitToolResult {
     param(
         [Parameter(Mandatory = $true)][long]$Code,
@@ -372,8 +372,8 @@ function Format-PSWinKitToolResult {
     }
     $detail = Get-PSWinKitExitCodeDescription -Code $Code -Messages $Messages `
         -ToolDescriptions $ToolDescriptions -IsWin32Code:$IsWin32Code
-    if ($detail) { return ('{0}: {1} ({2})' -f [string]$Messages.NativeResultError, $detail, $hex) }
-    return ('{0} ({1})' -f [string]$Messages.NativeResultError, $hex)
+    if ($detail) { return ('{0} ({1})' -f $detail, $hex) }
+    return ('{0} {1}' -f [string]$Messages.NativeResultError, $hex)
 }
 
 function Test-PSWinKitUacCancelled {
